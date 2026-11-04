@@ -11,6 +11,8 @@ MENU_MONITOR=eDP-1
 LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 CONFIG=${PHONE_CONFIG:-$HOME/.config/phone/config}
 [[ -f $CONFIG ]] && . "$CONFIG"
+SYNC=${SYNC:-$ROOT/sync}                 # laptop side of the audio sync: $SYNC/Audiobooks, $SYNC/Music
+SYNC_MANIFEST=$ROOT/.sync-manifest         # what was in sync after the last run (outside the synced folders)
 PULLED=$ROOT/.pulled
 TMP=$ROOT/.tmp
 
@@ -204,7 +206,7 @@ start_scrcpy() {
   set -- $pos; log "scrcpy -> $where at +$1+$2"
   systemd-run --user --quiet --unit=phone-scrcpy --collect \
       ${DISPLAY:+--setenv=DISPLAY="$DISPLAY"} ${XAUTHORITY:+--setenv=XAUTHORITY="$XAUTHORITY"} \
-      env SDL_VIDEODRIVER=x11 "${SCRCPY_BIN:-scrcpy}" --window-title=phone-scrcpy --window-x="$1" --window-y="$2" --fullscreen \
+      env SDL_VIDEODRIVER=x11 "${SCRCPY_BIN:-scrcpy}" --window-title=phone-scrcpy --window-x="$1" --window-y="$2" --fullscreen --stay-awake \
       9>&- >/dev/null 2>&1 || { log "systemd-run failed to start scrcpy"; return 1; }
   "$LIB/xplace" fullscreen phone-scrcpy "$1" "$2" 9>&- >/dev/null 2>&1 &   # make sure fullscreen is on that monitor
 }
@@ -215,4 +217,102 @@ open_menu_window() {
   if pos=$(monitor_pos "$MENU_MONITOR"); then set -- $pos; x=$(($1+50)); y=$(($2+50)); fi
   "$LIB/xplace" move phone-menu "$x" "$y" 9>&- 8>&- >/dev/null 2>&1 &   # Mutter ignores --position; ask it to move
   kitty -o linux_display_server=x11 -o remember_window_size=no --start-as=normal --position="${x}x${y}" --title phone-menu "$cmd" 8>&- 9>&-
+}
+
+# ---- audio sync (laptop is the source of truth) --------------------------------------------------
+# Laptop $SYNC/{Audiobooks,Music}  <->  phone /sdcard/{Audiobooks,Music}. Nothing else on the phone is touched.
+#   laptop only                      -> push
+#   phone only, in manifest          -> you deleted it on the laptop: delete from phone after you type yes
+#   phone only, not in manifest      -> new on the phone: pull into the laptop folder
+#   both, different size             -> reported, left alone
+# The manifest ($SYNC_MANIFEST) is rewritten at the end of every run with what is now in sync.
+SYNC_DIRS=(Audiobooks Music)
+
+shq() { local q=${1//\'/\'\\\'\'}; printf "'%s'" "$q"; }   # quote for the phone's sh (handles apostrophes)
+
+# sync_audio [--dry-run]
+sync_audio() {
+  local dry=0; [[ ${1:-} == --dry-run ]] && dry=1
+  wait_for_phone || return 1
+  local T=$'\t' sub rel size psize
+  local -A L=() P=() M=()          # key "Sub/rel" -> size
+  local -a push=() pull=() del=() differ=() keep=()
+
+  for sub in "${SYNC_DIRS[@]}"; do
+    if [[ ! -d $SYNC/$sub ]]; then
+      if [[ -e $SYNC_MANIFEST ]] && grep -q "^$sub/" "$SYNC_MANIFEST"; then
+        log "audio: ERROR $SYNC/$sub is missing but the manifest knows it (drive not mounted?), refusing to sync"; return 1
+      fi
+      mkdir -p "$SYNC/$sub"
+    fi
+    while IFS=$'\t' read -r size rel; do
+      [[ -n $rel ]] || continue
+      L["$sub/$rel"]=$size
+    done < <(cd "$SYNC/$sub" && find . -type f -printf '%s\t%P\n')
+    local out; out=$(adb -d shell "if [ -d /sdcard/$sub ]; then find /sdcard/$sub -type f -exec stat -c '%s	%n' {} +; fi; echo __END__" | tr -d '\r') \
+      || { log "audio: ERROR could not list /sdcard/$sub"; return 1; }
+    [[ $out == *__END__ ]] || { log "audio: ERROR incomplete listing of /sdcard/$sub"; return 1; }
+    while IFS=$'\t' read -r size rel; do
+      [[ $rel == /sdcard/$sub/* ]] && P["$sub/${rel#/sdcard/$sub/}"]=$size
+    done <<<"$out"
+  done
+  if [[ -e $SYNC_MANIFEST ]]; then
+    while IFS=$'\t' read -r rel size; do [[ -n $rel ]] && M["$rel"]=$size; done < "$SYNC_MANIFEST"
+  fi
+
+  local k
+  while IFS= read -r k; do
+    [[ -n $k ]] || continue
+    if   [[ -n ${L[$k]+x} && -z ${P[$k]+x} ]]; then push+=("$k")
+    elif [[ -n ${L[$k]+x} && ${L[$k]} == "${P[$k]}" ]]; then keep+=("$k")
+    elif [[ -n ${L[$k]+x} ]]; then differ+=("$k"); [[ -n ${M[$k]+x} ]] && keep+=("$k")
+    elif [[ -n ${M[$k]+x} ]]; then del+=("$k")
+    else pull+=("$k"); fi
+  done < <(printf '%s\n' "${!L[@]}" "${!P[@]}" | sort -u)
+
+  local first=""; [[ -e $SYNC_MANIFEST ]] || first=" (first run: phone files are imported into $SYNC)"
+  say "Audio sync summary$first"
+  printf 'to push (laptop -> phone): %d\n' ${#push[@]}; for k in "${push[@]}"; do printf '    %s  (%s)\n' "$k" "$(human "${L[$k]}")"; done
+  printf 'to pull (phone -> laptop): %d\n' ${#pull[@]}; for k in "${pull[@]}"; do printf '    %s  (%s)\n' "$k" "$(human "${P[$k]}")"; done
+  printf 'to delete from phone (deleted on laptop): %d\n' ${#del[@]}; for k in "${del[@]}"; do printf '    %s  (%s)\n' "$k" "$(human "${P[$k]}")"; done
+  (( ${#differ[@]} )) && { printf 'size differs, left alone: %d\n' ${#differ[@]}; printf '    %s\n' "${differ[@]}"; }
+  if (( dry )); then echo "(dry run: nothing changed)"; return 0; fi
+
+  local pushed=0 pulled=0 deleted=0 failed=0 want got tmp
+  local -a synced=("${keep[@]}")
+  for k in "${push[@]}"; do
+    sub=${k%%/*}; rel=${k#*/}
+    echo "-> push $k ($(human "${L[$k]}"))"
+    adb -d shell "mkdir -p $(shq "$(dirname "/sdcard/$k")")"
+    if adb -d push "$SYNC/$k" "/sdcard/$k" >&2; then
+      want=$(md5sum < "$SYNC/$k" | cut -d' ' -f1)
+      got=$(adb -d shell "md5sum $(shq "/sdcard/$k")" | tr -d '\r' | cut -d' ' -f1)
+      if [[ $want == "$got" ]]; then pushed=$((pushed+1)); synced+=("$k"); log "audio: pushed $k md5 ok"; continue; fi
+    fi
+    failed=$((failed+1)); log "audio: FAILED push $k"
+  done
+  for k in "${pull[@]}"; do
+    echo "<- pull $k ($(human "${P[$k]}"))"
+    tmp=$TMP/sync.$$.part; mkdir -p "$(dirname "$SYNC/$k")"
+    if adb -d pull "/sdcard/$k" "$tmp" >&2; then
+      want=$(adb -d shell "md5sum $(shq "/sdcard/$k")" | tr -d '\r' | cut -d' ' -f1)
+      got=$(md5sum < "$tmp" | cut -d' ' -f1)
+      if [[ -n $want && $want == "$got" ]] && mv -n "$tmp" "$SYNC/$k" && [[ ! -e $tmp ]]; then
+        pulled=$((pulled+1)); synced+=("$k"); log "audio: pulled $k md5 ok"; continue
+      fi
+    fi
+    rm -f "$tmp"; failed=$((failed+1)); log "audio: FAILED pull $k"
+  done
+  if (( ${#del[@]} )); then
+    local ans; read -r -p "Delete these ${#del[@]} files from the phone only? Type yes: " ans
+    if [[ $ans == yes ]]; then
+      for k in "${del[@]}"; do
+        if adb -d shell "rm $(shq "/sdcard/$k")"; then deleted=$((deleted+1)); log "audio: deleted from phone: $k"
+        else failed=$((failed+1)); synced+=("$k"); fi
+      done
+    else echo "not deleted; they stay in the manifest and are offered again next time"; synced+=("${del[@]}"); fi
+  fi
+  { for k in "${synced[@]}"; do printf '%s\t%s\n' "$k" "${L[$k]:-${P[$k]}}"; done; } | sort > "$SYNC_MANIFEST.new" && mv "$SYNC_MANIFEST.new" "$SYNC_MANIFEST"
+  say "Audio: $pushed pushed, $pulled pulled, $deleted deleted from phone, ${#differ[@]} differ (untouched), $failed failed"
+  (( failed == 0 ))
 }

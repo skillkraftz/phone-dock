@@ -15,11 +15,26 @@ mirrors the phone fullscreen on the configured monitor, and a kitty window on th
 | `actions/` | One executable per menu entry. |
 | `systemd/phone-pull.service` | User unit; `Type=simple` so a replug can't start a second session. |
 | `udev/99-phone-pull.rules` | Starts that unit when the Samsung's adb interface appears. |
+| `tests/run-tests.sh` | Offline tests against a fake adb (a directory standing in for the phone). No phone, no windows. |
 | `config.example` | Copy to `~/.config/phone/config`. |
 
 scrcpy runs as its own transient user unit, `phone-scrcpy`, so quitting the menu does not stop it. It exits
 by itself when the phone is unplugged. Stop it by hand with `systemctl --user stop phone-scrcpy`.
 Logs: `~/.local/state/phone-pull.log`.
+
+## Audio sync
+
+The laptop is the source of truth. Laptop folders `/data/phone/sync/Audiobooks` and `/data/phone/sync/Music` mirror
+`/sdcard/Audiobooks` and `/sdcard/Music`; nothing else on the phone is touched. Menu item 2 (or `actions/20-audio --dry-run`
+for just the summary) shows a summary first, then:
+
+- in laptop folder, not on phone: pushed (md5-verified)
+- on phone, not in laptop folder, in the manifest (`/data/phone/.sync-manifest`): you deleted it on the laptop; deleted from the phone only after you type `yes`
+- on phone, not in laptop folder, not in the manifest: new on the phone, pulled (md5-verified)
+- same name, different size: reported and left alone
+
+The first run has no manifest, so everything on the phone is imported and nothing can be offered for deletion.
+The manifest is rewritten after each run. If a laptop folder is missing while the manifest knows it, the run refuses.
 
 ## Adding an action
 

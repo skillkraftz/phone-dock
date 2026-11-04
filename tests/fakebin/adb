@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fake adb: the "phone" is the directory $FAKE_PHONE, mounted at /sdcard. Every call is logged to $FAKE_ADB_LOG.
+P=$FAKE_PHONE
+printf '%s\n' "$*" >> "$FAKE_ADB_LOG"
+[[ $1 == -d ]] && shift
+case $1 in
+  wait-for-device) exit 0 ;;
+  pull) shift; [[ $1 == -a ]] && shift; cp -p "${1/#\/sdcard/$P}" "$2"; echo "$1: 1 file pulled" >&2 ;;
+  push) shift; cp "$1" "${2/#\/sdcard/$P}" && echo "$1: 1 file pushed" >&2 ;;
+  shell) shift; cmd="$*"; sh -c "${cmd//\/sdcard/$P}" | sed "s#$P#/sdcard#g" ;;
+  *) echo "fake adb: unsupported: $*" >&2; exit 1 ;;
+esac

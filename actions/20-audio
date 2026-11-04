@@ -1,27 +1,4 @@
 #!/usr/bin/env bash
-# menu: Sync audio to phone (copy missing files only, never deletes)
+# menu: Sync audio with phone (laptop is the master; deletes from phone only after you type yes)
 . "$(dirname "$(readlink -f "$0")")/../lib/phone-lib"
-wait_for_phone || exit 1
-
-copied=0 skipped=0 differ=0 failed=0
-for sub in Audiobooks Music; do
-  src=$AUDIO_SRC/$sub; dest=/sdcard/$sub
-  [[ -d $src ]] || { echo "skip: $src does not exist"; continue; }
-  declare -A onphone=(); onphone=()
-  while IFS=$'\t' read -r size path; do onphone["${path#$dest/}"]=$size; done < <(
-    adb -d shell "[ -d '$dest' ] && find '$dest' -type f -exec stat -c '%s	%n' {} +" | tr -d '\r')
-  while IFS=$'\t' read -r size rel; do
-    if [[ $rel == *"'"* ]]; then echo "skip (apostrophe in name): $rel"; failed=$((failed+1)); continue; fi
-    if [[ -n ${onphone[$rel]:-} ]]; then
-      [[ ${onphone[$rel]} == "$size" ]] && skipped=$((skipped+1)) || { differ=$((differ+1)); echo "differs, left alone: $sub/$rel"; }
-      continue
-    fi
-    echo "-> $sub/$rel ($(human "$size"))"
-    adb -d shell "mkdir -p '$(dirname "$dest/$rel")'"
-    if adb -d push "$src/$rel" "$dest/$rel" >&2 &&
-       [[ $(adb -d shell "stat -c %s '$dest/$rel'" | tr -d '\r') == "$size" ]]; then
-      copied=$((copied+1)); log "audio: pushed $sub/$rel"
-    else failed=$((failed+1)); log "audio: FAILED $sub/$rel"; fi
-  done < <(cd "$src" && find . -type f -printf '%s\t%P\n' | sort -t$'\t' -k2)
-done
-say "Audio: $copied copied, $skipped already there, $differ differ (untouched), $failed failed"
+sync_audio "$@"

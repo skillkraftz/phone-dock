@@ -1,0 +1,3 @@
+#!/bin/sh
+case "$*" in *is-active*) exit 1 ;; esac
+exit 0

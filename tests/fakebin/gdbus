@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "(0, 960, 1.0, 0, true, [('eDP-1', 'v', 'p', 'LAPTOP')])"
