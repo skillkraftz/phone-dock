@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""xplace fullscreen|move TITLE X Y: wait for an X11/XWayland window titled TITLE and either make it
+fullscreen on the monitor containing X,Y, or move it to X,Y without resizing (_NET_MOVERESIZE_WINDOW). (Stand-in for xdotool, which isn't installed. Mutter ignores plain move requests from
+XWayland clients, but honours _NET_WM_FULLSCREEN_MONITORS.)"""
+import ctypes, subprocess, sys, time
+if len(sys.argv) != 5 or sys.argv[1] not in ("fullscreen", "move"):
+    sys.exit("usage: xplace fullscreen|move TITLE X Y")
+mode, title, x, y = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+
+X = ctypes.CDLL("libX11.so.6")
+X.XOpenDisplay.restype = ctypes.c_void_p
+X.XDefaultRootWindow.restype = ctypes.c_ulong
+X.XInternAtom.restype = ctypes.c_ulong
+X.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+X.XMoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
+d = X.XOpenDisplay(None)
+if not d: sys.exit("cannot open X display")
+
+wid = None
+for _ in range(100):                       # wait up to 10s for the window
+    out = subprocess.run(["xwininfo", "-name", title], capture_output=True, text=True).stdout
+    if "Window id:" in out:
+        wid = int(out.split("Window id:")[1].split()[0], 16); break
+    time.sleep(0.1)
+if wid is None: sys.exit(f"window '{title}' not found")
+
+class Ev(ctypes.Structure):                # XClientMessageEvent
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+def send(msg, *data):
+    e = Ev(type=33, send_event=1, display=d, window=wid, format=32, message_type=X.XInternAtom(d, msg, 0))
+    e.data[:] = data
+    X.XSendEvent(d, X.XDefaultRootWindow(d), 0, ctypes.c_long((1 << 20) | (1 << 19)), ctypes.byref(e))
+    X.XFlush(ctypes.c_void_p(d))
+
+if mode == "move":      # flags: x+y valid (bits 8,9), source indication 2 = pager/user (bits 12+), no size
+    send(b"_NET_MOVERESIZE_WINDOW", (2 << 12) | (1 << 8) | (1 << 9), x, y, 0, 0)
+    X.XCloseDisplay(ctypes.c_void_p(d)); sys.exit(0)
+
+# index of the monitor containing (x, y) in `xrandr --listmonitors`
+idx = 0
+for line in subprocess.run(["xrandr", "--listmonitors"], capture_output=True, text=True).stdout.splitlines()[1:]:
+    n, geo = line.split()[0].rstrip(":"), line.split()[2]          # e.g. 3840/1150x2160/650+3120+0
+    w, h, ox, oy = (int(v.split("/")[0]) for v in geo.replace("x", "+").split("+"))
+    if ox <= x < ox + w and oy <= y < oy + h: idx = int(n)
+
+X.XMoveWindow(d, ctypes.c_ulong(wid), x, y); X.XFlush(ctypes.c_void_p(d))
+time.sleep(0.5)
+send(b"_NET_WM_FULLSCREEN_MONITORS", idx, idx, idx, idx, 1)
+time.sleep(0.2)
+send(b"_NET_WM_STATE", 1, X.XInternAtom(d, b"_NET_WM_STATE_FULLSCREEN", 0), 0, 1, 0)
+X.XCloseDisplay(ctypes.c_void_p(d))

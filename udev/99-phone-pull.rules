@@ -1,0 +1,3 @@
+# Samsung (04e8) device exposing an adb interface (class ff, subclass 42, proto 01) -> run phone-pull as YOUR_USER.
+# The interface match keeps the Samsung T9 SSD (same vendor id) from triggering it.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="04e8", ENV{ID_USB_INTERFACES}=="*:ff4201:*", TAG+="uaccess", RUN+="/usr/bin/systemctl --user -M YOUR_USER@.host start --no-block phone-pull.service"

@@ -1,0 +1,217 @@
+# phone-lib: shared by phone-pull, phone, phone-session and actions/*. Source it; don't run it.
+# Never deletes local files. Phone files are only deleted by trim, after you type "yes".
+
+# Defaults; override any of these in the config file (see config.example).
+CAM=/sdcard/DCIM/Camera
+ROOT=/data/phone
+CLIPS=/data/footage/clips
+LOG=$HOME/.local/state/phone-pull.log
+KEEP_DAYS=60
+LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+CONFIG=${PHONE_CONFIG:-$HOME/.config/phone/config}
+[[ -f $CONFIG ]] && . "$CONFIG"
+PULLED=$ROOT/.pulled
+TMP=$ROOT/.tmp
+
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}
+mkdir -p "$(dirname "$LOG")" "$TMP" "$ROOT/photos" "$ROOT/videos" "$CLIPS"
+touch "$PULLED"
+
+log()    { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
+notify() { notify-send -a phone-pull -i phone "$1" "$2" 2>/dev/null || true; }
+human()  { numfmt --to=iec --suffix=B "${1:-0}"; }
+say()    { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+wait_for_phone() {
+  timeout 30 adb -d wait-for-device 2>/dev/null && return 0
+  log "ERROR: phone not found in adb within 30s (plugged in? USB debugging authorised?)"
+  notify "phone-pull failed" "phone not found in adb within 30s"
+  return 1
+}
+
+# Prints "size<TAB>mtime<TAB>name" for each visible file in the camera folder.
+list_phone() {
+  adb -d shell "find $CAM -maxdepth 1 -type f ! -name '.*' -exec stat -c '%s	%Y	%n' {} +" \
+    | tr -d '\r' | sed "s#\t$CAM/#\t#" | sort -t$'\t' -k3
+}
+
+is_pulled() { grep -Fxq -- "$1|$2" "$PULLED"; }   # name|size
+
+# Snap a nominal rate like 60000/1001 (or 59.9/1) to the nearest standard rate, as an exact fraction.
+snap_fps() {
+  awk -v r="$1" 'BEGIN {
+    split(r, f, "/"); v = f[1] / (f[2] ? f[2] : 1)
+    n = split("24000/1001 24/1 25/1 30000/1001 30/1 50/1 60000/1001 60/1 120/1 240/1", s, " ")
+    best = ""; bd = 1e9
+    for (i = 1; i <= n; i++) { split(s[i], q, "/"); d = (q[1]/q[2] - v); if (d < 0) d = -d; if (d < bd) { bd = d; best = s[i] } }
+    print best }'
+}
+
+# Make a constant-frame-rate, edit-ready h264/AAC copy of $1 (mtime $2) in $CLIPS/<date>/.
+make_clip() {
+  local src=$1 mtime=$2 dir out part fps r a
+  dir=$CLIPS/$(date -d "@$mtime" +%F); mkdir -p "$dir"
+  out=$dir/$(basename "${src%.*}").mp4; part=$out.part
+  [[ -e $out ]] && { log "clip exists, skipping: $out"; return 0; }
+
+  # Nominal rate (r_frame_rate), not avg_frame_rate: dropped frames pull the average down (e.g. 58.9).
+  fps=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$src")
+  [[ -n $fps && $fps != 0/0 ]] || { log "no frame rate for $src"; return 1; }
+  fps=$(snap_fps "$fps")
+
+  local common=(-map 0:v:0 -map '0:a:0?' -vf "fps=$fps" -fps_mode cfr -r "$fps"
+                -pix_fmt yuv420p -c:a aac -b:a 256k -movflags +faststart -f mp4)
+  if ! ffmpeg -nostdin -v error -y -i "$src" "${common[@]}" \
+        -c:v h264_nvenc -preset p7 -tune hq -rc vbr -cq 16 -b:v 0 -profile:v high "$part"; then
+    log "nvenc failed for $src, falling back to libx264"
+    ffmpeg -nostdin -v error -y -i "$src" "${common[@]}" \
+        -c:v libx264 -crf 16 -preset slow -profile:v high "$part" || { rm -f "$part"; return 1; }
+  fi
+
+  r=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate   -of csv=p=0 "$part")
+  a=$(ffprobe -v error -select_streams v:0 -show_entries stream=avg_frame_rate -of csv=p=0 "$part")
+  if [[ $r == "$a" && $r == "$fps" ]]; then
+    mv "$part" "$out"; log "clip ok ($r): $out"
+  else
+    mv "$part" "$out.unverified"; log "clip NOT constant fps (want=$fps r=$r avg=$a): $out.unverified"; return 1
+  fi
+}
+
+# pull_new [--no-clips]: copy new photos/videos, verify md5, record in .pulled. Shows per-file progress.
+pull_new() {
+  local clips_on=1; [[ ${1:-} == --no-clips ]] && clips_on=0
+  exec 9>"$(dirname "$LOG")/phone-pull.lock"
+  flock -n 9 || { log "another pull is running"; return 0; }
+  wait_for_phone || return 1
+
+  local photos=0 videos=0 clips=0 failed=0 old=0 cutoff size mtime name
+  cutoff=$(( $(date +%s) - KEEP_DAYS*86400 ))
+  local listing; listing=$(list_phone) || { log "ERROR: could not list $CAM"; return 1; }
+  log "phone has $(wc -l <<<"$listing") files in camera folder"
+
+  local -a todo=()                              # new files only
+  while IFS=$'\t' read -r size mtime name; do
+    [[ -n $name ]] || continue
+    if is_pulled "$name" "$size"; then (( mtime < cutoff )) && old=$((old+1)); else todo+=("$size"$'\t'"$mtime"$'\t'"$name"); fi
+  done <<<"$listing"
+
+  say "=== PULLING ${#todo[@]} NEW FILES — DO NOT UNPLUG THE PHONE ==="
+  local i=0 kind ym dest tmp want got dest_name
+  for entry in "${todo[@]}"; do
+    IFS=$'\t' read -r size mtime name <<<"$entry"; i=$((i+1))
+    case ${name,,} in *.mp4|*.mov|*.mkv|*.3gp) kind=videos ;; *) kind=photos ;; esac
+    ym=$(date -d "@$mtime" +%Y/%m); dest=$ROOT/$kind/$ym; mkdir -p "$dest"; tmp=$TMP/$name
+
+    printf '[%d/%d] %s (%s)\n' "$i" "${#todo[@]}" "$name" "$(human "$size")"
+    adb -d pull -a "$CAM/$name" "$tmp" >&2 || { log "pull failed: $name"; failed=$((failed+1)); continue; }
+    printf '        verifying md5...\r'
+    want=$(adb -d shell "md5sum '$CAM/$name'" | tr -d '\r' | cut -d' ' -f1)
+    got=$(md5sum "$tmp" | cut -d' ' -f1)
+    if [[ -z $want || $want != "$got" ]]; then
+      log "CHECKSUM MISMATCH $name (phone=$want local=$got), left in $tmp"; failed=$((failed+1)); continue
+    fi
+
+    dest_name=$name                              # never overwrite: same content is fine, else keep both
+    if [[ -e $dest/$name && $(md5sum < "$dest/$name" | cut -d' ' -f1) != "$got" ]]; then
+      dest_name="${name%.*}-${got:0:8}.${name##*.}"
+    fi
+    [[ -e $dest/$dest_name ]] || mv -n "$tmp" "$dest/$dest_name"
+    [[ -e $tmp ]] && rm -f "$tmp"                # only if an identical copy was already in place
+    echo "$name|$size" >> "$PULLED"
+    log "pulled $kind/$ym/$dest_name ($(human "$size")) md5 ok"
+
+    if [[ $kind == videos ]]; then
+      videos=$((videos+1))
+      if (( clips_on )); then
+        if make_clip "$dest/$dest_name" "$mtime"; then clips=$((clips+1)); else failed=$((failed+1)); fi
+      fi
+    else photos=$((photos+1)); fi
+  done
+
+  local msg="$photos photos, $videos videos pulled"
+  (( clips_on )) && msg+=", $clips clips converted"
+  (( failed )) && msg+=", $failed FAILED (see log)"
+  msg+=$'\n'"$old phone files older than $KEEP_DAYS days already backed up (--trim)"
+  log "done: ${msg//$'\n'/; }"
+  notify "Phone pull complete" "$msg"
+  local bad=""; (( failed )) && bad=", $failed FAILED"
+  say "=== PULL FINISHED ($photos photos, $videos videos$bad) — safe to unplug ==="
+  (( failed == 0 ))
+}
+
+trim() {
+  local days=${1:-$KEEP_DAYS} cutoff n=0 total=0 size mtime name ans
+  [[ $days =~ ^[0-9]+$ ]] || { echo "days must be a number"; return 1; }
+  wait_for_phone || return 1
+  cutoff=$(( $(date +%s) - days*86400 ))
+  local -a victims=()
+  while IFS=$'\t' read -r size mtime name; do
+    (( mtime < cutoff )) && is_pulled "$name" "$size" || continue
+    victims+=("$name"); n=$((n+1)); total=$((total+size))
+    printf '%s  %8s  %s\n' "$(date -d "@$mtime" +%F)" "$(human "$size")" "$name"
+  done < <(list_phone)
+  echo "$n files older than $days days, already pulled, $(human "$total") total"
+  (( n )) || return 0
+  read -r -p "Delete these from the phone? Type yes: " ans
+  [[ $ans == yes ]] || { echo "aborted, nothing deleted"; return 0; }
+  for name in "${victims[@]}"; do
+    adb -d shell "rm '$CAM/$name'" && log "trim: deleted from phone: $name"
+  done
+}
+
+# Rebuild clips left as *.mp4.unverified; the old file is kept, renamed *.superseded.
+redo_clips() {
+  local bad out base src
+  while IFS= read -r bad; do
+    out=${bad%.unverified}; base=$(basename "${out%.mp4}")
+    src=$(find "$ROOT/videos" -type f -name "$base.*" | head -n1)
+    [[ -n $src ]] || { log "redo: no source video for $bad"; continue; }
+    if make_clip "$src" "$(stat -c %Y "$src")"; then mv "$bad" "$bad.superseded"; fi
+  done < <(find "$CLIPS" -name '*.mp4.unverified' | sort)
+  log "redo-clips finished"
+}
+
+# ---- scrcpy / monitors -------------------------------------------------------------------------
+
+# monitor_pos SERIAL_OR_CONNECTOR -> "x y" of that monitor's top-left (Mutter logical coords), or fails.
+monitor_pos() {
+  gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig \
+      --method org.gnome.Mutter.DisplayConfig.GetCurrentState 2>/dev/null |
+  python3 -c '
+import re, sys
+want = sys.argv[1]
+t = sys.stdin.read()
+for m in re.finditer(r"\((-?\d+), (-?\d+), [\d.]+, (?:uint32 )?\d+, (?:true|false), \[\(\x27([^\x27]+)\x27, \x27[^\x27]*\x27, \x27[^\x27]*\x27, \x27([^\x27]*)\x27\)\]", t):
+    x, y, conn, serial = m.groups()
+    if want in (conn, serial): print(x, y); sys.exit(0)
+sys.exit(1)' "$1"
+}
+
+# scrcpy runs as its own transient user unit, so it outlives the menu and the session service.
+# It exits by itself when the phone is unplugged.
+scrcpy_running() { systemctl --user is-active --quiet phone-scrcpy; }
+stop_scrcpy()    { systemctl --user stop phone-scrcpy 2>/dev/null; }
+
+# Fullscreen scrcpy (via XWayland) on the Dell found by serial; else on the laptop screen; else not at all.
+start_scrcpy() {
+  scrcpy_running && { echo "scrcpy is already running"; return 0; }
+  systemctl --user reset-failed phone-scrcpy 2>/dev/null
+  local pos where
+  if pos=$(monitor_pos "$SCRCPY_MONITOR_SERIAL"); then where="Dell $SCRCPY_MONITOR_SERIAL"
+  elif pos=$(monitor_pos "$SCRCPY_FALLBACK_CONNECTOR"); then where="$SCRCPY_FALLBACK_CONNECTOR (Dell not connected)"
+  else log "no usable monitor for scrcpy, not starting it"; return 1; fi
+  set -- $pos; log "scrcpy -> $where at +$1+$2"
+  systemd-run --user --quiet --unit=phone-scrcpy --collect \
+      ${DISPLAY:+--setenv=DISPLAY="$DISPLAY"} ${XAUTHORITY:+--setenv=XAUTHORITY="$XAUTHORITY"} \
+      env SDL_VIDEODRIVER=x11 "${SCRCPY_BIN:-scrcpy}" --window-title=phone-scrcpy --window-x="$1" --window-y="$2" --fullscreen \
+      9>&- >/dev/null 2>&1 || { log "systemd-run failed to start scrcpy"; return 1; }
+  "$LIB/xplace" fullscreen phone-scrcpy "$1" "$2" 9>&- >/dev/null 2>&1 &   # make sure fullscreen is on that monitor
+}
+
+# open_menu_window: kitty on the laptop screen at normal size (position hint; xplace move as fallback).
+open_menu_window() {
+  local pos x=0 y=0 cmd=$1
+  if pos=$(monitor_pos "$SCRCPY_FALLBACK_CONNECTOR"); then set -- $pos; x=$(($1+50)); y=$(($2+50)); fi
+  "$LIB/xplace" move phone-menu "$x" "$y" 9>&- 8>&- >/dev/null 2>&1 &   # Mutter ignores --position; ask it to move
+  kitty -o linux_display_server=x11 --start-as=normal --position="${x}x${y}" --title phone-menu "$cmd" 8>&- 9>&-
+}

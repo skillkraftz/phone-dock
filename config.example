@@ -1,0 +1,13 @@
+# phone session config (sourced by bash)
+# scrcpy goes fullscreen on the monitor with this serial (resolved at session start via GNOME/Mutter,
+# so dock reconnects that rename DP-6/DP-9 don't matter). Right-hand Dell U2412M:
+SCRCPY_MONITOR_SERIAL=YOUR-MONITOR-SERIAL
+# Used if that Dell isn't connected (never any other external monitor):
+SCRCPY_FALLBACK_CONNECTOR=eDP-1
+# One-way audio sync sources (subfolders Audiobooks/ and Music/ go to /sdcard/Audiobooks and /sdcard/Music):
+AUDIO_SRC=/data/audio/to-phone
+# Optional overrides (defaults live at the top of lib/phone-lib):
+#ROOT=/data/phone                    # pulled originals: photos/ videos/ plus .pulled bookkeeping
+#CLIPS=/data/footage/clips           # edit-ready clips
+#KEEP_DAYS=60                        # default age for "Trim phone"
+#PHONE_CONFIG=/path/to/other/config  # (environment variable, not a config line) use another config file

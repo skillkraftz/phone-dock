@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# phone: menu run inside the phone session's kitty. Pulls new originals first, then lists actions/* .
+PROJECT=$(dirname "$(dirname "$(readlink -f "$0")")")
+. "$PROJECT/lib/phone-lib"
+
+pull_new --no-clips || say "Pull had problems — see $LOG"
+
+while true; do
+  actions=("$PROJECT"/actions/*); say "Phone menu"
+  for i in "${!actions[@]}"; do
+    printf '  %d) %s\n' $((i+1)) "$(sed -n 's/^# menu: //p;T;q' "${actions[$i]}")"   # title from "# menu:" line
+  done
+  echo "  q) Quit menu (scrcpy keeps running)"
+  read -r -p "> " choice || break
+  case $choice in
+    q|Q) break ;;
+    ''|*[!0-9]*) ;;
+    *) f=${actions[$((choice-1))]:-}; [[ -n $f ]] && { bash "$f"; read -r -p "[enter to continue] " _; } ;;
+  esac
+done

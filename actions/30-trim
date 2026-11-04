@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# menu: Trim phone (delete old, already-pulled files; asks first)
+. "$(dirname "$(readlink -f "$0")")/../lib/phone-lib"
+read -r -p "Older than how many days? [$KEEP_DAYS] " days
+trim "${days:-$KEEP_DAYS}"

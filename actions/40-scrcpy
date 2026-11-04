@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# menu: Reopen scrcpy
+. "$(dirname "$(readlink -f "$0")")/../lib/phone-lib"
+start_scrcpy

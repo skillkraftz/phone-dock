@@ -1,0 +1,7 @@
+[Unit]
+Description=Phone session (pull menu + scrcpy), started by udev when the Samsung is plugged in
+
+[Service]
+# Stays active while the session is open, so a replug can't start a second one.
+Type=simple
+ExecStart=%h/projects/phone-dock/bin/phone-session

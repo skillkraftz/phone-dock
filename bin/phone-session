@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# phone-session: started by phone-pull.service on plug-in. Starts scrcpy (its own unit, phone-scrcpy)
+# and a kitty running the menu. Ends when you quit the menu; scrcpy keeps running until you close it
+# or unplug the phone. systemd won't start a second session meanwhile.
+PROJECT=$(dirname "$(dirname "$(readlink -f "$0")")")
+. "$PROJECT/lib/phone-lib"
+
+exec 8>"$(dirname "$LOG")/phone-session.lock"
+flock -n 8 || { log "phone session already open"; exit 0; }
+
+wait_for_phone || exit 1
+start_scrcpy
+open_menu_window "$PROJECT/bin/phone"

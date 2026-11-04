@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# menu: Make clips (edit-ready, constant frame rate)
+. "$(dirname "$(readlink -f "$0")")/../lib/phone-lib"
+
+declare -A files            # date -> newline-separated video paths
+while IFS=$'\t' read -r mtime f; do
+  d=$(date -d "@${mtime%.*}" +%F); files[$d]+="$f"$'\n'
+done < <(find "$ROOT/videos" -type f -printf '%T@\t%p\n')
+dates=($(printf '%s\n' "${!files[@]}" | sort))
+(( ${#dates[@]} )) || { echo "No pulled videos yet."; exit 0; }
+
+for i in "${!dates[@]}"; do
+  d=${dates[$i]}; n=$(grep -c . <<<"${files[$d]}"); have=0
+  while IFS= read -r f; do [[ -n $f && -e $CLIPS/$d/$(basename "${f%.*}").mp4 ]] && have=$((have+1)); done <<<"${files[$d]}"
+  printf '  %2d) %s  %d video(s), %d clip(s) done\n' $((i+1)) "$d" "$n" "$have"
+done
+echo "Pick: a number (3), a range of numbers (3-5), a date (2026-10-01), a date range (2026-10-01..2026-10-05), or q."
+read -r -p "> " pick
+sel=()
+if [[ $pick =~ ^[0-9]+$ ]]; then sel=("${dates[$((pick-1))]:-}")
+elif [[ $pick =~ ^([0-9]+)-([0-9]+)$ ]]; then for ((k=${BASH_REMATCH[1]}; k<=${BASH_REMATCH[2]}; k++)); do sel+=("${dates[$((k-1))]:-}"); done
+elif [[ $pick =~ ^([0-9-]{10})(\.\.([0-9-]{10}))?$ ]]; then
+  lo=${BASH_REMATCH[1]}; hi=${BASH_REMATCH[3]:-$lo}
+  for d in "${dates[@]}"; do [[ $d == "$lo" || $d > "$lo" ]] && [[ $d == "$hi" || $d < "$hi" ]] && sel+=("$d"); done
+else exit 0; fi
+
+ok=0; bad=0
+for d in "${sel[@]}"; do
+  [[ -n $d ]] || continue
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
+    echo "-> $f"; if make_clip "$f" "$(stat -c %Y "$f")"; then ok=$((ok+1)); else bad=$((bad+1)); fi
+  done <<<"${files[$d]}"
+done
+say "Clips: $ok ok, $bad failed (in $CLIPS)"

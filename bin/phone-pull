@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# phone-pull: copy new camera files from the phone over adb (shared logic lives in phone-lib).
+#   phone-pull               pull new photos/videos and make edit-ready clips
+#   phone-pull --no-clips    originals only
+#   phone-pull --redo-clips  rebuild clips left as *.mp4.unverified
+#   phone-pull --trim [N]    delete phone files older than N days (default 60) already pulled; asks first
+. "$(dirname "$(dirname "$(readlink -f "$0")")")/lib/phone-lib"
+case ${1:-} in
+  ""|--no-clips) pull_new "$@" ;;
+  --redo-clips)  redo_clips ;;
+  --trim)        trim "${2:-}" ;;
+  *)             echo "usage: phone-pull [--no-clips | --redo-clips | --trim [days]]" >&2; exit 2 ;;
+esac
