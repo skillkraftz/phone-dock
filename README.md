@@ -24,9 +24,18 @@ Logs: `~/.local/state/phone-pull.log`.
 
 ## Audio sync
 
-The laptop is the source of truth. Laptop folders `/data/phone/sync/Audiobooks` and `/data/phone/sync/Music` mirror
-`/sdcard/Audiobooks` and `/sdcard/Music`; nothing else on the phone is touched. Menu item 2 (or `actions/20-audio --dry-run`
-for just the summary) shows a summary first, then:
+The laptop is the source of truth. Exactly two mappings, and nothing else on the phone is listed, pushed, pulled or deleted:
+
+| Laptop | Phone |
+|---|---|
+| `/data/phone/music/` | `/sdcard/SdCardBackUp/Music/`, **excluding** its `Audiobooks/` subfolder |
+| `/data/phone/audiobooks/` | `/sdcard/SdCardBackUp/Music/Audiobooks/` |
+
+Folder structure matches exactly (`music/The Strokes/x.mp3` <-> `SdCardBackUp/Music/The Strokes/x.mp3`). The music side never
+touches `Music/Audiobooks/` (it is pruned from the phone listing, and a stray `music/Audiobooks/` on the laptop is ignored).
+`/sdcard/Music` and `/sdcard/Audiobooks` are not used. Everything lives under `/data/phone`; `/data/audio` is not used.
+
+Menu item 2 (or `actions/20-audio --dry-run` for just the summary) shows a summary first, then:
 
 - in laptop folder, not on phone: pushed (md5-verified)
 - on phone, not in laptop folder, in the manifest (`/data/phone/.sync-manifest`): you deleted it on the laptop; deleted from the phone only after you type `yes`

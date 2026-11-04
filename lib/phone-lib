@@ -11,7 +11,9 @@ MENU_MONITOR=eDP-1
 LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 CONFIG=${PHONE_CONFIG:-$HOME/.config/phone/config}
 [[ -f $CONFIG ]] && . "$CONFIG"
-SYNC=${SYNC:-$ROOT/sync}                 # laptop side of the audio sync: $SYNC/Audiobooks, $SYNC/Music
+MUSIC_DIR=${MUSIC_DIR:-$ROOT/music}                  # laptop side of the music sync
+AUDIOBOOKS_DIR=${AUDIOBOOKS_DIR:-$ROOT/audiobooks}   # laptop side of the audiobook sync
+PHONE_MUSIC=${PHONE_MUSIC:-/sdcard/SdCardBackUp/Music}   # phone side; its Audiobooks/ subfolder belongs to the audiobooks sync
 SYNC_MANIFEST=$ROOT/.sync-manifest         # what was in sync after the last run (outside the synced folders)
 PULLED=$ROOT/.pulled
 TMP=$ROOT/.tmp
@@ -220,40 +222,64 @@ open_menu_window() {
 }
 
 # ---- audio sync (laptop is the source of truth) --------------------------------------------------
-# Laptop $SYNC/{Audiobooks,Music}  <->  phone /sdcard/{Audiobooks,Music}. Nothing else on the phone is touched.
+# Two mappings, nothing else on the phone is ever listed, pushed, pulled or deleted:
+#   $MUSIC_DIR      (/data/phone/music)      <->  $PHONE_MUSIC (/sdcard/SdCardBackUp/Music), EXCLUDING its Audiobooks/
+#   $AUDIOBOOKS_DIR (/data/phone/audiobooks) <->  $PHONE_MUSIC/Audiobooks
+# Folder structure matches exactly (music/The Strokes/x.mp3 -> SdCardBackUp/Music/The Strokes/x.mp3).
+# Per file:
 #   laptop only                      -> push
 #   phone only, in manifest          -> you deleted it on the laptop: delete from phone after you type yes
 #   phone only, not in manifest      -> new on the phone: pull into the laptop folder
 #   both, different size             -> reported, left alone
-# The manifest ($SYNC_MANIFEST) is rewritten at the end of every run with what is now in sync.
-SYNC_DIRS=(Audiobooks Music)
+# The manifest ($SYNC_MANIFEST, keys "music/<rel>" and "audiobooks/<rel>") is rewritten at the end of every run.
+SYNC_NAMES=(music audiobooks)
 
 shq() { local q=${1//\'/\'\\\'\'}; printf "'%s'" "$q"; }   # quote for the phone's sh (handles apostrophes)
+
+# Per-mapping paths. The music side must never reach into Audiobooks/.
+sync_laptop() { case $1 in music) echo "$MUSIC_DIR" ;; audiobooks) echo "$AUDIOBOOKS_DIR" ;; esac; }
+sync_phone()  { case $1 in music) echo "$PHONE_MUSIC" ;; audiobooks) echo "$PHONE_MUSIC/Audiobooks" ;; esac; }
+# sync_rel_ok KEY: key is "music/<rel>" or "audiobooks/<rel>"; refuse anything that would escape its mapping.
+sync_rel_ok() {
+  local name=${1%%/*} rel=${1#*/}
+  [[ $1 == */* && -n $rel && $rel != /* && $rel != ../* && $rel != */../* && $rel != */.. ]] || return 1
+  [[ $name == music && ( $rel == Audiobooks || $rel == Audiobooks/* ) ]] && return 1
+  [[ $name == music || $name == audiobooks ]]
+}
+sync_phone_path() { printf '%s/%s' "$(sync_phone "${1%%/*}")" "${1#*/}"; }
+sync_laptop_path() { printf '%s/%s' "$(sync_laptop "${1%%/*}")" "${1#*/}"; }
 
 # sync_audio [--dry-run]
 sync_audio() {
   local dry=0; [[ ${1:-} == --dry-run ]] && dry=1
   wait_for_phone || return 1
-  local T=$'\t' sub rel size psize
-  local -A L=() P=() M=()          # key "Sub/rel" -> size
+  local name rel size lap pb find_cmd out
+  local -A L=() P=() M=()          # key "music/<rel>" -> size
   local -a push=() pull=() del=() differ=() keep=()
 
-  for sub in "${SYNC_DIRS[@]}"; do
-    if [[ ! -d $SYNC/$sub ]]; then
-      if [[ -e $SYNC_MANIFEST ]] && grep -q "^$sub/" "$SYNC_MANIFEST"; then
-        log "audio: ERROR $SYNC/$sub is missing but the manifest knows it (drive not mounted?), refusing to sync"; return 1
+  for name in "${SYNC_NAMES[@]}"; do
+    lap=$(sync_laptop "$name"); pb=$(sync_phone "$name")
+    if [[ ! -d $lap ]]; then
+      if [[ -e $SYNC_MANIFEST ]] && grep -q "^$name/" "$SYNC_MANIFEST"; then
+        log "audio: ERROR $lap is missing but the manifest knows it (drive not mounted?), refusing to sync"; return 1
       fi
-      mkdir -p "$SYNC/$sub"
+      mkdir -p "$lap"
     fi
+    if [[ $name == music ]]; then   # laptop side: a stray Audiobooks/ folder here is not part of music
+      [[ -e $lap/Audiobooks ]] && echo "note: ignoring $lap/Audiobooks (audiobooks live in $AUDIOBOOKS_DIR)"
+      while IFS=$'\t' read -r size rel; do [[ -n $rel ]] && L["$name/$rel"]=$size
+      done < <(cd "$lap" && find . -path ./Audiobooks -prune -o -type f -printf '%s\t%P\n')
+      find_cmd="find $(shq "$pb") -path $(shq "$pb/Audiobooks") -prune -o -type f -exec stat -c '%s	%n' {} +"
+    else
+      while IFS=$'\t' read -r size rel; do [[ -n $rel ]] && L["$name/$rel"]=$size
+      done < <(cd "$lap" && find . -type f -printf '%s\t%P\n')
+      find_cmd="find $(shq "$pb") -type f -exec stat -c '%s	%n' {} +"
+    fi
+    out=$(adb -d shell "if [ -d $(shq "$pb") ]; then $find_cmd; fi; echo __END__" | tr -d '\r') \
+      || { log "audio: ERROR could not list $pb"; return 1; }
+    [[ $out == *__END__ ]] || { log "audio: ERROR incomplete listing of $pb"; return 1; }
     while IFS=$'\t' read -r size rel; do
-      [[ -n $rel ]] || continue
-      L["$sub/$rel"]=$size
-    done < <(cd "$SYNC/$sub" && find . -type f -printf '%s\t%P\n')
-    local out; out=$(adb -d shell "if [ -d /sdcard/$sub ]; then find /sdcard/$sub -type f -exec stat -c '%s	%n' {} +; fi; echo __END__" | tr -d '\r') \
-      || { log "audio: ERROR could not list /sdcard/$sub"; return 1; }
-    [[ $out == *__END__ ]] || { log "audio: ERROR incomplete listing of /sdcard/$sub"; return 1; }
-    while IFS=$'\t' read -r size rel; do
-      [[ $rel == /sdcard/$sub/* ]] && P["$sub/${rel#/sdcard/$sub/}"]=$size
+      [[ $rel == "$pb"/* ]] && sync_rel_ok "$name/${rel#"$pb"/}" && P["$name/${rel#"$pb"/}"]=$size
     done <<<"$out"
   done
   if [[ -e $SYNC_MANIFEST ]]; then
@@ -263,6 +289,7 @@ sync_audio() {
   local k
   while IFS= read -r k; do
     [[ -n $k ]] || continue
+    sync_rel_ok "$k" || { echo "skip (outside its mapping): $k"; continue; }
     if   [[ -n ${L[$k]+x} && -z ${P[$k]+x} ]]; then push+=("$k")
     elif [[ -n ${L[$k]+x} && ${L[$k]} == "${P[$k]}" ]]; then keep+=("$k")
     elif [[ -n ${L[$k]+x} ]]; then differ+=("$k"); [[ -n ${M[$k]+x} ]] && keep+=("$k")
@@ -270,7 +297,7 @@ sync_audio() {
     else pull+=("$k"); fi
   done < <(printf '%s\n' "${!L[@]}" "${!P[@]}" | sort -u)
 
-  local first=""; [[ -e $SYNC_MANIFEST ]] || first=" (first run: phone files are imported into $SYNC)"
+  local first=""; [[ -e $SYNC_MANIFEST ]] || first=" (first run: phone files are imported into the laptop folders)"
   say "Audio sync summary$first"
   printf 'to push (laptop -> phone): %d\n' ${#push[@]}; for k in "${push[@]}"; do printf '    %s  (%s)\n' "$k" "$(human "${L[$k]}")"; done
   printf 'to pull (phone -> laptop): %d\n' ${#pull[@]}; for k in "${pull[@]}"; do printf '    %s  (%s)\n' "$k" "$(human "${P[$k]}")"; done
@@ -278,26 +305,27 @@ sync_audio() {
   (( ${#differ[@]} )) && { printf 'size differs, left alone: %d\n' ${#differ[@]}; printf '    %s\n' "${differ[@]}"; }
   if (( dry )); then echo "(dry run: nothing changed)"; return 0; fi
 
-  local pushed=0 pulled=0 deleted=0 failed=0 want got tmp
+  local pushed=0 pulled=0 deleted=0 failed=0 want got tmp pp lp
   local -a synced=("${keep[@]}")
   for k in "${push[@]}"; do
-    sub=${k%%/*}; rel=${k#*/}
+    pp=$(sync_phone_path "$k"); lp=$(sync_laptop_path "$k")
     echo "-> push $k ($(human "${L[$k]}"))"
-    adb -d shell "mkdir -p $(shq "$(dirname "/sdcard/$k")")"
-    if adb -d push "$SYNC/$k" "/sdcard/$k" >&2; then
-      want=$(md5sum < "$SYNC/$k" | cut -d' ' -f1)
-      got=$(adb -d shell "md5sum $(shq "/sdcard/$k")" | tr -d '\r' | cut -d' ' -f1)
+    adb -d shell "mkdir -p $(shq "$(dirname "$pp")")"
+    if adb -d push "$lp" "$pp" >&2; then
+      want=$(md5sum < "$lp" | cut -d' ' -f1)
+      got=$(adb -d shell "md5sum $(shq "$pp")" | tr -d '\r' | cut -d' ' -f1)
       if [[ $want == "$got" ]]; then pushed=$((pushed+1)); synced+=("$k"); log "audio: pushed $k md5 ok"; continue; fi
     fi
     failed=$((failed+1)); log "audio: FAILED push $k"
   done
   for k in "${pull[@]}"; do
+    pp=$(sync_phone_path "$k"); lp=$(sync_laptop_path "$k")
     echo "<- pull $k ($(human "${P[$k]}"))"
-    tmp=$TMP/sync.$$.part; mkdir -p "$(dirname "$SYNC/$k")"
-    if adb -d pull "/sdcard/$k" "$tmp" >&2; then
-      want=$(adb -d shell "md5sum $(shq "/sdcard/$k")" | tr -d '\r' | cut -d' ' -f1)
+    tmp=$TMP/sync.$$.part; mkdir -p "$(dirname "$lp")"
+    if adb -d pull "$pp" "$tmp" >&2; then
+      want=$(adb -d shell "md5sum $(shq "$pp")" | tr -d '\r' | cut -d' ' -f1)
       got=$(md5sum < "$tmp" | cut -d' ' -f1)
-      if [[ -n $want && $want == "$got" ]] && mv -n "$tmp" "$SYNC/$k" && [[ ! -e $tmp ]]; then
+      if [[ -n $want && $want == "$got" ]] && mv -n "$tmp" "$lp" && [[ ! -e $tmp ]]; then
         pulled=$((pulled+1)); synced+=("$k"); log "audio: pulled $k md5 ok"; continue
       fi
     fi
@@ -307,7 +335,7 @@ sync_audio() {
     local ans; read -r -p "Delete these ${#del[@]} files from the phone only? Type yes: " ans
     if [[ $ans == yes ]]; then
       for k in "${del[@]}"; do
-        if adb -d shell "rm $(shq "/sdcard/$k")"; then deleted=$((deleted+1)); log "audio: deleted from phone: $k"
+        if adb -d shell "rm $(shq "$(sync_phone_path "$k")")"; then deleted=$((deleted+1)); log "audio: deleted from phone: $k"
         else failed=$((failed+1)); synced+=("$k"); fi
       done
     else echo "not deleted; they stay in the manifest and are offered again next time"; synced+=("${del[@]}"); fi

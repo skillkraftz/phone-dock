@@ -6,7 +6,9 @@ SCRCPY_MONITOR_SERIAL=YOUR-MONITOR-SERIAL
 SCRCPY_FALLBACK_CONNECTOR=eDP-1
 # Monitor (connector or serial) the phone menu's kitty window opens on:
 MENU_MONITOR=eDP-1
-# Audio sync: laptop folders are $ROOT/sync/Audiobooks and $ROOT/sync/Music (override with SYNC=...).
+# Audio sync folders (defaults shown; usually leave alone):
+#MUSIC_DIR=/data/phone/music                       # <-> /sdcard/SdCardBackUp/Music (excluding its Audiobooks/)
+#AUDIOBOOKS_DIR=/data/phone/audiobooks             # <-> /sdcard/SdCardBackUp/Music/Audiobooks
 # Optional overrides (defaults live at the top of lib/phone-lib):
 #ROOT=/data/phone                    # pulled originals: photos/ videos/ plus .pulled bookkeeping
 #CLIPS=/data/footage/clips           # edit-ready clips
