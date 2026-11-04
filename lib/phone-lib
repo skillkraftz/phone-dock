@@ -7,6 +7,7 @@ ROOT=/data/phone
 CLIPS=/data/footage/clips
 LOG=$HOME/.local/state/phone-pull.log
 KEEP_DAYS=60
+MENU_MONITOR=eDP-1
 LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 CONFIG=${PHONE_CONFIG:-$HOME/.config/phone/config}
 [[ -f $CONFIG ]] && . "$CONFIG"
@@ -208,10 +209,10 @@ start_scrcpy() {
   "$LIB/xplace" fullscreen phone-scrcpy "$1" "$2" 9>&- >/dev/null 2>&1 &   # make sure fullscreen is on that monitor
 }
 
-# open_menu_window: kitty on the laptop screen at normal size (position hint; xplace move as fallback).
+# open_menu_window: kitty on $MENU_MONITOR at kitty's default size (remember_window_size=no; position hint plus xplace move once mapped).
 open_menu_window() {
   local pos x=0 y=0 cmd=$1
-  if pos=$(monitor_pos "$SCRCPY_FALLBACK_CONNECTOR"); then set -- $pos; x=$(($1+50)); y=$(($2+50)); fi
+  if pos=$(monitor_pos "$MENU_MONITOR"); then set -- $pos; x=$(($1+50)); y=$(($2+50)); fi
   "$LIB/xplace" move phone-menu "$x" "$y" 9>&- 8>&- >/dev/null 2>&1 &   # Mutter ignores --position; ask it to move
-  kitty -o linux_display_server=x11 --start-as=normal --position="${x}x${y}" --title phone-menu "$cmd" 8>&- 9>&-
+  kitty -o linux_display_server=x11 -o remember_window_size=no --start-as=normal --position="${x}x${y}" --title phone-menu "$cmd" 8>&- 9>&-
 }
