@@ -11,7 +11,7 @@ pass=0 fail=0
 ok()  { pass=$((pass+1)); echo "  ok   $1"; }
 bad() { fail=$((fail+1)); echo "  FAIL $1"; }
 check() { if eval "$2"; then ok "$1"; else bad "$1   [$2]"; fi; }
-run() { local in=$1; shift; bash "$PROJECT/actions/20-audio" "$@" <<<"$in" >"$W/out" 2>&1; echo $? >"$W/rc"; }
+run() { local in=$1; shift; : > "$FAKE_ADB_LOG"; bash "$PROJECT/actions/20-audio" "$@" <<<"$in" >"$W/out" 2>&1; echo $? >"$W/rc"; cat "$FAKE_ADB_LOG" >> "$W/all-adb.log"; }
 mk() { mkdir -p "$(dirname "$1")"; head -c "${3:-1000}" /dev/urandom > "$1"; }   # mk path _ size
 tree_sum() { (cd "$FAKE_PHONE" && find DCIM Download -type f -exec md5sum {} + | sort | md5sum); }
 
@@ -85,8 +85,8 @@ mv "$W/Music.away" "$SYNC/Music"
 echo "T9 scope: nothing outside Audiobooks/Music is touched"
 check "DCIM/Download unchanged" '[[ $(tree_sum) == "$OTHER" ]]'
 check "every adb shell/push/pull targets /sdcard/Audiobooks or /sdcard/Music" \
-  '! grep -E "^(shell|push|pull)" "$FAKE_ADB_LOG" | grep -o "/sdcard[^ \"'"'"']*" | grep -vE "^/sdcard/(Audiobooks|Music)(/|$)"'
-check "adb log was non-empty (scope check not vacuous)" '[[ $(grep -cE "^(shell|push|pull)" "$FAKE_ADB_LOG") -gt 5 ]]'
+  '! grep -E "^(shell|push|pull)" "$W/all-adb.log" | grep -o "/sdcard[^ \"'"'"']*" | grep -vE "^/sdcard/(Audiobooks|Music)(/|$)"'
+check "adb log was non-empty (scope check not vacuous)" '[[ $(grep -cE "^(shell|push|pull)" "$W/all-adb.log") -gt 30 ]]'
 
 echo "T10 scrcpy gets --stay-awake and never turns the screen off"
 (. "$PROJECT/lib/phone-lib"; start_scrcpy) >/dev/null 2>&1
