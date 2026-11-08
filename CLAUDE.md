@@ -28,6 +28,14 @@ Set fake mtimes through epoch (`settime`), not `touch -d "local time"`: uutils t
 - Clip dates come from `clip_path`/`clip_stamp` only; don't re-derive them from mtime elsewhere.
 - `pull_new` is a subshell function so its lock on fd 9 is released on return; keep it that way.
 
-## Style and commits
+## Style
 Terse bash, comments say why not what. Commit subjects are imperative and descriptive; body explains the
-reason and what was verified. Don't commit unless asked.
+reason and what was verified.
+
+## Git workflow
+- Each task works on its own branch named after the task: `feat/`, `fix/` or `chore/<short-name>`.
+- Commit there, push the branch, and open a PR against `main` with `gh`.
+- Never commit directly to `main`. Never force-push `main`.
+- If there is no remote, or `gh` isn't logged in, commit on the branch and say so.
+- Always end the report with the branch name and the PR URL.
+- Keep the repo publishable: no real serials, user names, emails (beyond the commit identity), media, logs or transcripts in files or commit messages.

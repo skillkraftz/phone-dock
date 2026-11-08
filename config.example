@@ -1,8 +1,11 @@
 # phone session config (sourced by bash)
 # scrcpy goes fullscreen on the monitor with this serial (resolved at session start via GNOME/Mutter,
-# so dock reconnects that rename DP-6/DP-9 don't matter). Right-hand Dell U2412M:
+# so dock reconnects that rename DP-6/DP-9 don't matter). Find yours with:
+#   gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig \
+#     --method org.gnome.Mutter.DisplayConfig.GetCurrentState     (the serial is the 4th quoted string of a monitor)
+# While it is the placeholder (or the monitor is unplugged) the fallback connector below is used.
 SCRCPY_MONITOR_SERIAL=YOUR-MONITOR-SERIAL
-# Used if that Dell isn't connected (never any other external monitor):
+# Used if that monitor isn't connected (never any other external monitor):
 SCRCPY_FALLBACK_CONNECTOR=eDP-1
 # Monitor (connector or serial) the phone menu's kitty window opens on:
 MENU_MONITOR=eDP-1

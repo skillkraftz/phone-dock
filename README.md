@@ -24,7 +24,7 @@ Logs: `~/.local/state/phone-pull.log`.
 
 ## Clips
 
-A clip is an edit-ready, constant-frame-rate h264/AAC copy of a pulled video, at `/data/footage/clips/<date>/<name>.mp4`.
+A clip is an edit-ready, constant-frame-rate h264/AAC copy of a pulled video, at `$CLIPS/<date>/<name>.mp4` (default `CLIPS=/data/footage/clips`).
 
 **Dating.** The `<date>` is when the recording *started*: taken from the Samsung filename (`YYYYMMDD_HHMMSS`, optionally
 with a `-<md5>` or `_N` suffix), because file mtime is when it *ended* (a 23:58 video would land on the next day) and
@@ -44,17 +44,17 @@ The laptop is the source of truth. Exactly two mappings, and nothing else on the
 
 | Laptop | Phone |
 |---|---|
-| `/data/phone/music/` | `/sdcard/SdCardBackUp/Music/`, **excluding** its `Audiobooks/` subfolder |
-| `/data/phone/audiobooks/` | `/sdcard/SdCardBackUp/Music/Audiobooks/` |
+| `$MUSIC_DIR` (default `/data/phone/music/`) | `/sdcard/SdCardBackUp/Music/`, **excluding** its `Audiobooks/` subfolder |
+| `$AUDIOBOOKS_DIR` (default `/data/phone/audiobooks/`) | `/sdcard/SdCardBackUp/Music/Audiobooks/` |
 
 Folder structure matches exactly (`music/The Strokes/x.mp3` <-> `SdCardBackUp/Music/The Strokes/x.mp3`). The music side never
 touches `Music/Audiobooks/` (it is pruned from the phone listing, and a stray `music/Audiobooks/` on the laptop is ignored).
-`/sdcard/Music` and `/sdcard/Audiobooks` are not used. Everything lives under `/data/phone`; `/data/audio` is not used.
+`/sdcard/Music` and `/sdcard/Audiobooks` are not used. Everything lives under `ROOT` (default `/data/phone`, set in the config).
 
 Menu item 2 (or `actions/20-audio --dry-run` for just the summary) shows a summary first, then:
 
 - in laptop folder, not on phone: pushed (md5-verified)
-- on phone, not in laptop folder, in the manifest (`/data/phone/.sync-manifest`): you deleted it on the laptop; deleted from the phone only after you type `yes`
+- on phone, not in laptop folder, in the manifest (`$ROOT/.sync-manifest`): you deleted it on the laptop; deleted from the phone only after you type `yes`
 - on phone, not in laptop folder, not in the manifest: new on the phone, pulled (md5-verified)
 - same name, different size: reported and left alone
 
@@ -81,8 +81,9 @@ git clone/cd ~/projects/phone-dock
 mkdir -p ~/.config/phone && cp config.example ~/.config/phone/config   # then edit it
 for n in phone phone-pull phone-session; do ln -s "$PWD/bin/$n" ~/bin/$n; done
 systemctl --user link "$PWD/systemd/phone-pull.service"
-sudo cp udev/99-phone-pull.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+sed "s/YOUR_USER/$USER/" udev/99-phone-pull.rules | sudo tee /etc/udev/rules.d/99-phone-pull.rules >/dev/null && sudo udevadm control --reload
 ```
 
-The rule runs `systemctl --user -M YOUR_USER@.host start phone-pull.service`; edit the user name for another account.
+The rule file holds `YOUR_USER` where the login goes; the `sed` above fills in `$USER`. It then runs `systemctl --user -M $USER@.host start phone-pull.service`.
+The systemd unit expects the checkout at `~/projects/phone-dock` (edit `ExecStart` otherwise).
 Needs: adb, scrcpy, kitty, ffmpeg, xwininfo, gdbus, python3 (X11 via XWayland).

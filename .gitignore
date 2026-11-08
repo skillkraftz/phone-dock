@@ -1,0 +1,35 @@
+# logs and scratch
+*.log
+*.part
+*.unverified
+*.superseded
+.tmp/
+# local config (config.example is the tracked template)
+config
+.env
+# media and transcripts
+*.mp4
+*.mov
+*.mkv
+*.3gp
+*.m4a
+*.m4b
+*.mp3
+*.jpg
+*.jpeg
+*.png
+*.srt
+*.vtt
+*.wav
+*.txt
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# model files
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.bin
