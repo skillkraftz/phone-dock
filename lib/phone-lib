@@ -7,6 +7,7 @@ ROOT=/data/phone
 CLIPS=/data/footage/clips
 LOG=$HOME/.local/state/phone-pull.log
 KEEP_DAYS=60
+TRANSCRIBE=1                                     # clips menu: transcribe the originals first (stenographr)
 CLIPS_MENU_DAYS=14                              # how many recording dates the clips menu lists before "a"
 MENU_MONITOR=eDP-1
 LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
@@ -69,6 +70,9 @@ clip_path() {
   local stamp b=${1##*/}; stamp=$(clip_stamp "$1" "$2")
   printf '%s/%s/%s.mp4\n' "$CLIPS" "${stamp%% *}" "${b%.*}"
 }
+
+# transcript_path SRC MTIME -> the transcript (stenographr .md) of an original, beside its clip.
+transcript_path() { local p; p=$(clip_path "$1" "$2"); printf '%s.md\n' "${p%.mp4}"; }
 
 # Make a constant-frame-rate, edit-ready h264/AAC copy of $1 (mtime $2) at clip_path.
 make_clip() {

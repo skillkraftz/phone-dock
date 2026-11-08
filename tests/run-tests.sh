@@ -3,7 +3,7 @@
 HERE=$(dirname "$(readlink -f "$0")"); PROJECT=$(dirname "$HERE")
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 export FAKE_PHONE=$W/phone FAKE_ADB_LOG=$W/adb.log FAKE_SCRCPY_ARGS=$W/scrcpy.args
-export FAKE_FF_LOG=$W/ff.log
+export FAKE_FF_LOG=$W/ff.log FAKE_ORDER_LOG=$W/order.log FAKE_STENO_LOG=$W/steno.log
 export PATH=$HERE/fakebin:$HERE/fakebin-ff:$PATH PHONE_CONFIG=$W/config
 printf 'ROOT=%s/data/phone\nCLIPS=%s/data/clips\nLOG=%s/phone.log\nSCRCPY_MONITOR_SERIAL=NOPE\nSCRCPY_FALLBACK_CONNECTOR=eDP-1\n' "$W" "$W" "$W" > "$W/config"
 R=$W/data/phone; MUS=$R/music; AUD=$R/audiobooks; MAN=$R/.sync-manifest
@@ -219,5 +219,40 @@ bash "$PROJECT/bin/phone" <<<$'0\n99\nabc\nq' >"$W/out" 2>&1
 check "0 / 99 / abc do not run any action" '[[ ! -e $FAKE_SCRCPY_ARGS ]] && [[ $(grep -c "No such entry" "$W/out") == 3 ]]'
 bash "$PROJECT/bin/phone" <<<$'04\n\nq' >"$W/out" 2>&1
 check "04 runs the 4th action (scrcpy)" '[[ -e $FAKE_SCRCPY_ARGS ]]'
+
+echo "T17 clips menu transcribes the originals first"
+rm -rf "$R/videos" "$CL"; : > "$FAKE_ORDER_LOG"; : > "$FAKE_STENO_LOG"
+mkv 20260302_235800.mp4 "2026-03-03 00:01:00"; mkv 20260303_090000.mp4 "2026-03-03 09:05:00"
+mkv 20260303_070000.mp4 "2026-03-03 11:00:00"; mkv clip.mp4 "2026-03-03 08:30:00"
+steno_calls() { grep -c . "$FAKE_STENO_LOG"; }
+reset17() { rm -rf "$CL"; : > "$FAKE_ORDER_LOG"; : > "$FAKE_STENO_LOG"; }
+clipsrun "1"
+check "stenographr called once for the date, before any encoding" '[[ $(steno_calls) == 1 && $(grep -c steno "$FAKE_ORDER_LOG") == 1 && $(sed -n 1p "$FAKE_ORDER_LOG") == steno && $(grep -c ffmpeg "$FAKE_ORDER_LOG") == 3 ]]'
+check "all 3 originals and --out CLIPS/<date> in that call" 'grep -q -- "--out $CL/2026-03-03\$" "$FAKE_STENO_LOG" && [[ $(grep -o "videos/2026/03/[^ ]*mp4" "$FAKE_STENO_LOG" | wc -l) == 3 ]]'
+check "transcripts beside the clips" '[[ -e $CL/2026-03-03/clip.md && -e $CL/2026-03-03/clip.mp4 ]]'
+check "summary line counts" 'grep -q "^Transcripts: 3 made, 0 already done, 0 failed" "$W/out" && grep -q "3 made, 0 already done, 0 failed (in" "$W/out"'
+clipsrun "q"
+check "date list shows transcribed count" 'grep -qE "^ +1\) 2026-03-03  3 video\(s\), 3 clip\(s\) done, 3 transcribed" "$W/out" && grep -qE "^ +2\) 2026-03-02  1 video\(s\), 0 clip\(s\) done, 0 transcribed" "$W/out"'
+: > "$FAKE_STENO_LOG"; clipsrun "1"
+check "rerun: nothing passed to stenographr, all already done" '[[ $(steno_calls) == 0 ]] && grep -q "^Transcripts: 0 made, 3 already done, 0 failed" "$W/out" && ! grep -qi "refus\|already transcribed" "$W/out"'
+reset17; mkdir -p "$CL/2026-03-03"; echo mine > "$CL/2026-03-03/clip.md"
+clipsrun "1"
+check "an existing transcript is skipped, only the other 2 are passed" '[[ $(steno_calls) == 1 ]] && ! grep -q "clip.mp4" "$FAKE_STENO_LOG" && [[ $(grep -o "videos/2026/03/[^ ]*mp4" "$FAKE_STENO_LOG" | wc -l) == 2 ]] && [[ $(cat "$CL/2026-03-03/clip.md") == mine ]] && grep -q "^Transcripts: 2 made, 1 already done, 0 failed" "$W/out"'
+reset17
+FAKE_STENO_FAIL=clip.mp4 clipsrun "1"
+check "transcription failure: clip still made, counted as failed" '[[ -e $CL/2026-03-03/clip.mp4 && ! -e $CL/2026-03-03/clip.md && $(ffn) == 3 ]] && grep -q "^Transcripts: 2 made, 0 already done, 1 failed" "$W/out" && grep -q "3 made, 0 already done, 0 failed (in" "$W/out"'
+reset17
+clipsrun "1"; check "control: TRANSCRIBE=1 calls stenographr" '[[ $(steno_calls) == 1 ]]'
+reset17; cp "$W/config" "$W/config.save"; echo "TRANSCRIBE=0" >> "$W/config"
+clipsrun "1"
+check "TRANSCRIBE=0: stenographr never called, silent, clips still made" '[[ $(steno_calls) == 0 && ! -e $CL/2026-03-03/clip.md && -e $CL/2026-03-03/clip.mp4 ]] && ! grep -qi "stenographr\|^Transcripts" "$W/out"'
+mv "$W/config.save" "$W/config"
+reset17
+# PATH holding everything except stenographr (the real one may live in ~/.local/bin)
+NS=$W/nosteno; mkdir -p "$NS"
+for d in ${PATH//:/ }; do for f in "$d"/*; do [[ -x $f && -f $f && ${f##*/} != stenographr ]] && ln -sn "$f" "$NS/${f##*/}" 2>/dev/null; done; done
+PATH=$NS clipsrun "1"
+check "stenographr missing: one notice, no call, clips still made" '[[ $(grep -c "stenographr is not on PATH" "$W/out") == 1 && $(steno_calls) == 0 && $(ffn) == 3 ]] && ! grep -q "^Transcripts" "$W/out"'
+reset17; rm -rf "$R/videos"
 
 echo; echo "$pass passed, $fail failed"; (( fail == 0 ))

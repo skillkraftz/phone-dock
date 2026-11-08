@@ -15,6 +15,7 @@ MENU_MONITOR=eDP-1
 # Optional overrides (defaults live at the top of lib/phone-lib):
 #ROOT=/data/phone                    # pulled originals: photos/ videos/ plus .pulled bookkeeping
 #CLIPS=/data/footage/clips           # edit-ready clips
+#TRANSCRIBE=1                       # 0 = the clips menu does not transcribe the originals (needs stenographr on PATH)
 #CLIPS_MENU_DAYS=14                 # recording dates the clips menu lists before you press "a"
 #KEEP_DAYS=60                        # default age for "Trim phone"
 #PHONE_CONFIG=/path/to/other/config  # (environment variable, not a config line) use another config file

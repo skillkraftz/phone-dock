@@ -38,6 +38,13 @@ a date (`2026-10-01`) or a date range (`2026-10-01..2026-10-05`, either order); 
 Bad input is rejected with a message and you are asked again; `q` quits. Within a date, videos are made in recording
 order. Existing clips are skipped; the summary says how many were made, already done, and failed.
 
+**Transcripts.** Unless `TRANSCRIBE=0` is set in the config, the menu first transcribes the selected originals with
+[`stenographr`](https://github.com/skillkraftz/stenographr) (must be on `PATH`; if not, you get one notice and clips
+are made as usual). It makes one `stenographr clip` call per date, so the model loads once per date, writing
+`$CLIPS/<date>/<name>.md` beside the clip. Originals that already have a transcript are skipped (stenographr allows
+one transcript per source file). A failed transcript never blocks the clip; the end of the run prints
+`Transcripts: X made, Y already done, Z failed`, and each date line shows how many are transcribed.
+
 ## Audio sync
 
 The laptop is the source of truth. Exactly two mappings, and nothing else on the phone is listed, pushed, pulled or deleted:

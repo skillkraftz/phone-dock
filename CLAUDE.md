@@ -16,7 +16,7 @@ Bash (plus small python helpers) that drives an Android phone over adb: on plug-
 | `systemd/`, `udev/` | Session unit and the udev rule that starts it |
 
 ## Tests
-`bash tests/run-tests.sh` (offline, takes seconds, ~75 checks). Add a section per behaviour; new checks must
+`bash tests/run-tests.sh` (offline, takes seconds, ~85 checks). Add a section per behaviour; new checks must
 fail on the code they guard (run them against the previous commit in a `git worktree`).
 Set fake mtimes through epoch (`settime`), not `touch -d "local time"`: uutils touch reads that as UTC.
 
@@ -25,6 +25,7 @@ Set fake mtimes through epoch (`settime`), not `touch -d "local time"`: uutils t
 - Phone files are deleted only after the user types `yes` (trim and audio sync). Local files are never deleted by the code.
 - Audio sync scope is `/sdcard/SdCardBackUp/Music` only (Audiobooks is a subfolder with its own mapping). The laptop is the source of truth.
 - Phone paths in `adb shell` strings go through `shq`.
+- Clips menu: transcripts (stenographr, `TRANSCRIBE=1`) come before encoding, one call per date, skipping originals that already have a `.md`; a failed transcript never blocks the clip. Tests use the fake `tests/fakebin/stenographr`, never the real one.
 - Clip dates come from `clip_path`/`clip_stamp` only; don't re-derive them from mtime elsewhere.
 - `pull_new` is a subshell function so its lock on fd 9 is released on return; keep it that way.
 

@@ -13,15 +13,15 @@ total=${#dates[@]}
 for d in "${dates[@]}"; do files[$d]=$(grep . <<<"${files[$d]}" | sort); done     # stamp, then path
 
 list_dates() {
-  local shown=$total i d n have bad f st
+  local shown=$total i d n have bad tr f st
   (( show_all )) || shown=$(( total < 10#$CLIPS_MENU_DAYS ? total : 10#$CLIPS_MENU_DAYS ))
   for ((i=0; i<shown; i++)); do
-    d=${dates[$i]}; n=0; have=0; bad=0
+    d=${dates[$i]}; n=0; have=0; bad=0; tr=0
     while IFS=$'\t' read -r st f; do
       n=$((n+1)); out=$(clip_path "$f" "$(stat -c %Y "$f")")
-      [[ -e $out ]] && have=$((have+1)); [[ -e $out.unverified ]] && bad=$((bad+1))
+      [[ -e $out ]] && have=$((have+1)); [[ -e $out.unverified ]] && bad=$((bad+1)); [[ -e ${out%.mp4}.md ]] && tr=$((tr+1))
     done <<<"${files[$d]}"
-    printf '  %2d) %s  %d video(s), %d clip(s) done' $((i+1)) "$d" "$n" "$have"
+    printf '  %2d) %s  %d video(s), %d clip(s) done, %d transcribed' $((i+1)) "$d" "$n" "$have" "$tr"
     (( bad )) && printf ', %d unverified' "$bad"; echo
   done
   (( shown < total )) && echo "  ... $((total-shown)) older date(s) hidden; \"a\" lists all (numbers and dates still reach them)"
@@ -53,6 +53,30 @@ while true; do
   break
 done
 
+# Transcribe the originals first (one stenographr call per date, so the model loads once per date).
+# Skipped here when a transcript exists, so a rerun doesn't print refusals. Counted by whether the .md
+# exists afterwards, not by parsing stenographr's output; a failed transcript never blocks the encode.
+tmade=0 tdone=0 tbad=0 transcribing=0
+if [[ $TRANSCRIBE == 1 ]]; then
+  if command -v stenographr >/dev/null; then transcribing=1
+  else echo "stenographr is not on PATH: skipping transcription (TRANSCRIBE=0 in the config silences this)"; fi
+fi
+if (( transcribing )); then
+  for d in "${sel[@]}"; do
+    todo=()
+    while IFS=$'\t' read -r -u 3 st f; do
+      [[ -n $f ]] || continue
+      if [[ -e $(transcript_path "$f" "$(stat -c %Y "$f")") ]]; then tdone=$((tdone+1)); else todo+=("$f"); fi
+    done 3<<<"${files[$d]}"
+    (( ${#todo[@]} )) || continue
+    echo "== transcribing ${#todo[@]} video(s) from $d"
+    stenographr clip "${todo[@]}" --out "$CLIPS/$d" </dev/null || true
+    for f in "${todo[@]}"; do
+      if [[ -e $(transcript_path "$f" "$(stat -c %Y "$f")") ]]; then tmade=$((tmade+1)); else tbad=$((tbad+1)); fi
+    done
+  done
+fi
+
 made=0 done_=0 bad=0
 for d in "${sel[@]}"; do
   # fd 3, so nothing make_clip runs can eat the rest of the list from stdin
@@ -64,3 +88,4 @@ for d in "${sel[@]}"; do
   done 3<<<"${files[$d]}"
 done
 say "Clips: $made made, $done_ already done, $bad failed (in $CLIPS)"
+(( transcribing )) && echo "Transcripts: $tmade made, $tdone already done, $tbad failed"
