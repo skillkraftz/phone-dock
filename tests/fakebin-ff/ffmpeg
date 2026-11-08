@@ -4,5 +4,6 @@
 in=; args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do [[ ${args[i]} == -i ]] && in=${args[i+1]}; done
 printf '%s\n' "$in" >> "$FAKE_FF_LOG"
+echo ffmpeg >> "${FAKE_ORDER_LOG:-/dev/null}"
 [[ -n ${FAKE_FF_FAIL:-} && $in == *"$FAKE_FF_FAIL"* ]] && exit 1
 : > "${args[-1]}"
