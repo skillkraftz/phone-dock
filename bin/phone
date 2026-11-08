@@ -14,7 +14,10 @@ while true; do
   read -r -p "> " choice || break
   case $choice in
     q|Q) break ;;
-    ''|*[!0-9]*) ;;
-    *) f=${actions[$((choice-1))]:-}; [[ -n $f ]] && { bash "$f"; read -r -p "[enter to continue] " _; } ;;
+    '') ;;
+    # 10#: "08" is 8, not an octal error. Bounds-check: a negative index would pick the LAST action.
+    *[!0-9]*|??????*) echo "No such entry: $choice" ;;
+    *) if (( 10#$choice >= 1 && 10#$choice <= ${#actions[@]} )); then bash "${actions[$((10#$choice-1))]}"; read -r -p "[enter to continue] " _
+       else echo "No such entry: $choice (1-${#actions[@]})"; fi ;;
   esac
 done

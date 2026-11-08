@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake ffprobe: constant 30 fps. FAKE_FF_EAT_STDIN=1 swallows stdin, like a careless tool would.
+[[ -n ${FAKE_FF_EAT_STDIN:-} ]] && cat >/dev/null
+echo 30/1

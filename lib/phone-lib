@@ -7,6 +7,7 @@ ROOT=/data/phone
 CLIPS=/data/footage/clips
 LOG=$HOME/.local/state/phone-pull.log
 KEEP_DAYS=60
+CLIPS_MENU_DAYS=14                              # how many recording dates the clips menu lists before "a"
 MENU_MONITOR=eDP-1
 LIB=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
 CONFIG=${PHONE_CONFIG:-$HOME/.config/phone/config}
@@ -28,7 +29,7 @@ human()  { numfmt --to=iec --suffix=B "${1:-0}"; }
 say()    { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
 wait_for_phone() {
-  timeout 30 adb -d wait-for-device 2>/dev/null && return 0
+  timeout 30 adb -d wait-for-device 2>/dev/null 9>&- && return 0   # 9>&-: adb's background server must not inherit the pull lock
   log "ERROR: phone not found in adb within 30s (plugged in? USB debugging authorised?)"
   notify "phone-pull failed" "phone not found in adb within 30s"
   return 1
@@ -52,11 +53,27 @@ snap_fps() {
     print best }'
 }
 
-# Make a constant-frame-rate, edit-ready h264/AAC copy of $1 (mtime $2) in $CLIPS/<date>/.
+# clip_stamp SRC MTIME -> "YYYY-MM-DD HH:MM:SS" when the recording started. The Samsung filename
+# (YYYYMMDD_HHMMSS[-<md5>].ext) has the start time; mtime is the END of the recording and changes if the
+# phone edits the file, so it is only the fallback for other names.
+clip_stamp() {
+  local b=${1##*/} m=${2%.*} s
+  if [[ $b =~ ^([0-9]{4})([0-9]{2})([0-9]{2})_([0-9]{2})([0-9]{2})([0-9]{2}) ]]; then
+    s="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}"
+    [[ $(date -d "$s" '+%F %T' 2>/dev/null) == "$s" ]] && { echo "$s"; return; }   # rejects 20261345_...
+  fi
+  printf '%(%F %T)T\n' "$m"
+}
+# clip_path SRC MTIME -> where the clip for SRC lives. The one place that decides; make_clip and the menu both use it.
+clip_path() {
+  local stamp b=${1##*/}; stamp=$(clip_stamp "$1" "$2")
+  printf '%s/%s/%s.mp4\n' "$CLIPS" "${stamp%% *}" "${b%.*}"
+}
+
+# Make a constant-frame-rate, edit-ready h264/AAC copy of $1 (mtime $2) at clip_path.
 make_clip() {
-  local src=$1 mtime=$2 dir out part fps r a
-  dir=$CLIPS/$(date -d "@$mtime" +%F); mkdir -p "$dir"
-  out=$dir/$(basename "${src%.*}").mp4; part=$out.part
+  local src=$1 mtime=$2 out part fps r a
+  out=$(clip_path "$src" "$mtime"); mkdir -p "$(dirname "$out")"; part=$out.part
   [[ -e $out ]] && { log "clip exists, skipping: $out"; return 0; }
 
   # Nominal rate (r_frame_rate), not avg_frame_rate: dropped frames pull the average down (e.g. 58.9).
@@ -83,7 +100,7 @@ make_clip() {
 }
 
 # pull_new [--no-clips]: copy new photos/videos, verify md5, record in .pulled. Shows per-file progress.
-pull_new() {
+pull_new() (   # subshell on purpose: the lock on fd 9 is released when this returns, not held by the caller's shell
   local clips_on=1; [[ ${1:-} == --no-clips ]] && clips_on=0
   exec 9>"$(dirname "$LOG")/phone-pull.lock"
   flock -n 9 || { log "another pull is running"; return 0; }
@@ -100,7 +117,8 @@ pull_new() {
     if is_pulled "$name" "$size"; then (( mtime < cutoff )) && old=$((old+1)); else todo+=("$size"$'\t'"$mtime"$'\t'"$name"); fi
   done <<<"$listing"
 
-  say "=== PULLING ${#todo[@]} NEW FILES — DO NOT UNPLUG THE PHONE ==="
+  if (( ${#todo[@]} )); then say "=== PULLING ${#todo[@]} NEW FILES — DO NOT UNPLUG THE PHONE ==="
+  else say "=== Nothing new on the phone ==="; fi
   local i=0 kind ym dest tmp want got dest_name
   for entry in "${todo[@]}"; do
     IFS=$'\t' read -r size mtime name <<<"$entry"; i=$((i+1))
@@ -110,7 +128,7 @@ pull_new() {
     printf '[%d/%d] %s (%s)\n' "$i" "${#todo[@]}" "$name" "$(human "$size")"
     adb -d pull -a "$CAM/$name" "$tmp" >&2 || { log "pull failed: $name"; failed=$((failed+1)); continue; }
     printf '        verifying md5...\r'
-    want=$(adb -d shell "md5sum '$CAM/$name'" | tr -d '\r' | cut -d' ' -f1)
+    want=$(adb -d shell "md5sum $(shq "$CAM/$name")" | tr -d '\r' | cut -d' ' -f1)
     got=$(md5sum "$tmp" | cut -d' ' -f1)
     if [[ -z $want || $want != "$got" ]]; then
       log "CHECKSUM MISMATCH $name (phone=$want local=$got), left in $tmp"; failed=$((failed+1)); continue
@@ -142,7 +160,7 @@ pull_new() {
   local bad=""; (( failed )) && bad=", $failed FAILED"
   say "=== PULL FINISHED ($photos photos, $videos videos$bad) — safe to unplug ==="
   (( failed == 0 ))
-}
+)
 
 trim() {
   local days=${1:-$KEEP_DAYS} cutoff n=0 total=0 size mtime name ans
@@ -160,7 +178,7 @@ trim() {
   read -r -p "Delete these from the phone? Type yes: " ans
   [[ $ans == yes ]] || { echo "aborted, nothing deleted"; return 0; }
   for name in "${victims[@]}"; do
-    adb -d shell "rm '$CAM/$name'" && log "trim: deleted from phone: $name"
+    adb -d shell "rm $(shq "$CAM/$name")" && log "trim: deleted from phone: $name"
   done
 }
 

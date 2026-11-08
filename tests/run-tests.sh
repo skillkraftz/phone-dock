@@ -3,7 +3,8 @@
 HERE=$(dirname "$(readlink -f "$0")"); PROJECT=$(dirname "$HERE")
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 export FAKE_PHONE=$W/phone FAKE_ADB_LOG=$W/adb.log FAKE_SCRCPY_ARGS=$W/scrcpy.args
-export PATH=$HERE/fakebin:$PATH PHONE_CONFIG=$W/config
+export FAKE_FF_LOG=$W/ff.log
+export PATH=$HERE/fakebin:$HERE/fakebin-ff:$PATH PHONE_CONFIG=$W/config
 printf 'ROOT=%s/data/phone\nCLIPS=%s/data/clips\nLOG=%s/phone.log\nSCRCPY_MONITOR_SERIAL=NOPE\nSCRCPY_FALLBACK_CONNECTOR=eDP-1\n' "$W" "$W" "$W" > "$W/config"
 R=$W/data/phone; MUS=$R/music; AUD=$R/audiobooks; MAN=$R/.sync-manifest
 PM=$FAKE_PHONE/SdCardBackUp/Music            # phone music root; PM/Audiobooks is the audiobooks side
@@ -118,5 +119,105 @@ echo "T11 scrcpy gets --stay-awake and never turns the screen off"
 check "--stay-awake passed" 'grep -q -- "--stay-awake" "$FAKE_SCRCPY_ARGS"'
 check "no screen-off flags" '! grep -qE -- "--turn-screen-off|--power-off-on-close" "$FAKE_SCRCPY_ARGS"'
 check "still fullscreen" 'grep -q -- "--fullscreen" "$FAKE_SCRCPY_ARGS"'
+
+# ---- pull and clips -------------------------------------------------------------------------------
+CL=$W/data/clips; CAMF=$FAKE_PHONE/DCIM/Camera; LOCK=$W/phone-pull.lock
+# settime "LOCAL DATE TIME" FILE: via epoch, because some touch builds read -d times as UTC while date uses the local zone
+settime() { touch -d "@$(date -d "$1" +%s)" "$2"; }
+# mkv NAME "DATE TIME": a fake video in the pulled-originals tree with that mtime
+mkv() { mkdir -p "$R/videos/2026/03"; echo "$1" > "$R/videos/2026/03/$1"; settime "$2" "$R/videos/2026/03/$1"; }
+# clipsrun INPUT: the clips menu with INPUT on stdin
+clipsrun() { : > "$FF"; bash "$PROJECT/actions/10-clips" <<<"$1" >"$W/out" 2>&1; echo $? >"$W/rc"; }
+ffn() { grep -c . "$FAKE_FF_LOG"; }
+ffl() { sed 's#.*/##' "$FAKE_FF_LOG" | paste -sd' '; }     # encoded inputs, in order
+
+echo "T12 pull: clips are filed by recording start; lock is released; second pull is quiet"
+rm -rf "$CAMF"/* "$R/videos" "$R/photos" "$CL" "$R/.pulled"; : > "$FAKE_FF_LOG"
+mk "$CAMF/20260301_235800.mp4" 900; settime "2026-03-02 00:01:30" "$CAMF/20260301_235800.mp4"   # ends after midnight
+mk "$CAMF/VID_funny.mp4" 800;       settime "2026-03-05 10:00:00" "$CAMF/VID_funny.mp4"          # not a Samsung name
+mk "$CAMF/20260306_101010.jpg" 300; settime "2026-03-06 10:10:10" "$CAMF/20260306_101010.jpg"
+( . "$PROJECT/lib/phone-lib"; pull_new; echo "rc=$?"; flock -n "$LOCK" true && echo LOCK-FREE ) >"$W/out" 2>&1
+check "pull ok" 'grep -q "rc=0" "$W/out"'
+check "midnight-crossing video filed under its start date" '[[ -e $CL/2026-03-01/20260301_235800.mp4 && ! -e $CL/2026-03-02 ]]'
+check "non-Samsung name filed by mtime" '[[ -e $CL/2026-03-05/VID_funny.mp4 ]]'
+check "only the two videos were encoded" '[[ $(ffn) == 2 ]]'
+check "pull lock is free after pull_new returns" 'grep -q LOCK-FREE "$W/out"'
+check "banner counts the new files" 'grep -q "PULLING 3 NEW FILES" "$W/out"'
+( . "$PROJECT/lib/phone-lib"; pull_new ) >"$W/out" 2>&1
+check "second pull says nothing is new" 'grep -qi "nothing new" "$W/out" && ! grep -q "PULLING" "$W/out"'
+check "second pull encoded nothing" '[[ $(ffn) == 2 ]]'
+rm -f "$CAMF"/*
+mk "$CAMF/20260307_080000.mp4" 100
+( exec 8>"$LOCK"; flock -n 8; . "$PROJECT/lib/phone-lib"; pull_new ) >"$W/out" 2>&1
+check "pull refuses while another pull holds the lock" 'grep -q "another pull is running" "$W/out" && [[ $(ffn) == 2 ]]'
+rm -f "$CAMF"/*
+
+echo "T13 phone paths are quoted with shq"
+mk "$CAMF/it's mine.jpg" 200
+( . "$PROJECT/lib/phone-lib"; pull_new --no-clips ) >"$W/out" 2>&1
+check "file with an apostrophe pulled and verified" '[[ -e "$R/photos/$(date +%Y/%m)/it'"'"'s mine.jpg" ]] || find "$R/photos" -name "it'"'"'s mine.jpg" | grep -q .'
+rm -f "$CAMF"/*
+
+echo "T14 clips menu"
+rm -rf "$R/videos" "$CL"; FF=$FAKE_FF_LOG
+mkv 20260301_120000.mp4 "2026-03-01 12:05:00"
+mkv 20260302_235800.mp4 "2026-03-03 00:01:00"      # recorded on the 2nd, ends on the 3rd
+mkv 20260303_090000.mp4 "2026-03-03 09:05:00"
+mkv 20260303_070000.mp4 "2026-03-03 11:00:00"      # edited by the phone later: mtime must not matter
+mkv clip.mp4            "2026-03-03 08:30:00"      # no Samsung name: mtime is the start
+clipsrun "q"
+check "newest date is 1" 'grep -qE "^ +1\) 2026-03-03  3 video" "$W/out" && grep -qE "^ +3\) 2026-03-01  1 video" "$W/out"'
+check "2nd of March has the video recorded on it" 'grep -qE "^ +2\) 2026-03-02  1 video" "$W/out"'
+clipsrun $'0\n99\nxyz\n-1\n4\nq'
+check "0 / 99 / garbage / -1 / 4 rejected, nothing encoded" '[[ $(cat $W/rc) == 0 && ! -s $FAKE_FF_LOG && $(grep -c -E "^(No such number|Not understood)" "$W/out") == 5 ]]'
+check "0 does not fall through to the last date" '[[ ! -d $CL/2026-03-01 ]]'
+clipsrun "01"
+check "01 (leading zero) = newest date, no octal error" '! grep -q "base" "$W/out" && [[ $(ffn) == 3 ]]'
+check "recording order within the day" '[[ $(ffl) == "20260303_070000.mp4 clip.mp4 20260303_090000.mp4" ]]'
+check "summary: 3 made" 'grep -q "3 made, 0 already done, 0 failed" "$W/out"'
+check "clips filed by start date" '[[ -e $CL/2026-03-03/clip.mp4 && -e $CL/2026-03-03/20260303_070000.mp4 ]]'
+clipsrun "1"
+check "rerun: already done, nothing encoded" 'grep -q "0 made, 3 already done, 0 failed" "$W/out" && [[ $(ffn) == 0 ]]'
+rm -rf "$CL"
+clipsrun "3-2"
+check "reversed number range works" '[[ $(ffl) == "20260302_235800.mp4 20260301_120000.mp4" ]]'
+rm -rf "$CL"
+clipsrun "2026-03-02..2026-03-01"
+check "reversed date range works" '[[ $(ffn) == 2 ]] && grep -q "2 made" "$W/out"'
+rm -rf "$CL"
+clipsrun "2026-03-01"
+check "single date" '[[ $(ffl) == "20260301_120000.mp4" ]]'
+clipsrun $'2026-05-05\n2026-05-06..2026-05-07\nq'
+check "date with no recordings rejected" '! grep -q "made" "$W/out" && [[ $(ffn) == 0 ]]'
+rm -rf "$CL"; mkdir -p "$CL/2026-03-03"; : > "$CL/2026-03-03/20260303_090000.mp4.unverified"
+clipsrun "q"
+check "unverified count shown" 'grep -qE "^ +1\) 2026-03-03 .*1 unverified" "$W/out" && ! grep -E "2\) |3\) " "$W/out" | grep -q unverified'
+rm -rf "$CL"
+FAKE_FF_FAIL=clip.mp4 clipsrun "1"
+check "failed counted separately from made" 'grep -q "2 made, 0 already done, 1 failed" "$W/out"'
+rm -rf "$CL"
+FAKE_FF_EAT_STDIN=1 clipsrun "1"
+check "tools that read stdin cannot eat the file list" '[[ $(ffn) == 3 ]]'
+rm -rf "$CL"
+
+echo "T15 clips menu: only the newest CLIPS_MENU_DAYS dates are listed"
+rm -rf "$R/videos" "$CL"; cp "$W/config" "$W/config.save"; echo "CLIPS_MENU_DAYS=2" >> "$W/config"
+for d in 01 02 03 04 05; do mkv "202603${d}_100000.mp4" "2026-03-$d 10:05:00"; done
+clipsrun "q"
+check "2 dates listed, 3 hidden, hint printed" 'grep -qE "^ +2\) 2026-03-04" "$W/out" && ! grep -qE "^ +3\)" "$W/out" && grep -q "3 older date" "$W/out"'
+clipsrun $'a\nq'
+check "a lists all" 'grep -qE "^ +5\) 2026-03-01" "$W/out"'
+clipsrun "5"
+check "hidden date reachable by number" '[[ $(ffl) == "20260301_100000.mp4" ]]'
+rm -rf "$CL"; clipsrun "2026-03-02"
+check "hidden date reachable by date" '[[ $(ffl) == "20260302_100000.mp4" ]]'
+mv "$W/config.save" "$W/config"
+
+echo "T16 bin/phone menu"
+rm -f "$FAKE_SCRCPY_ARGS"
+bash "$PROJECT/bin/phone" <<<$'0\n99\nabc\nq' >"$W/out" 2>&1
+check "0 / 99 / abc do not run any action" '[[ ! -e $FAKE_SCRCPY_ARGS ]] && [[ $(grep -c "No such entry" "$W/out") == 3 ]]'
+bash "$PROJECT/bin/phone" <<<$'04\n\nq' >"$W/out" 2>&1
+check "04 runs the 4th action (scrcpy)" '[[ -e $FAKE_SCRCPY_ARGS ]]'
 
 echo; echo "$pass passed, $fail failed"; (( fail == 0 ))

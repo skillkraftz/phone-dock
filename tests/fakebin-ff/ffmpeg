@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake ffmpeg: logs each -i input to $FAKE_FF_LOG and creates the output (last argument).
+# FAKE_FF_FAIL=<substring>: fail for inputs whose path contains it.
+in=; args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do [[ ${args[i]} == -i ]] && in=${args[i+1]}; done
+printf '%s\n' "$in" >> "$FAKE_FF_LOG"
+[[ -n ${FAKE_FF_FAIL:-} && $in == *"$FAKE_FF_FAIL"* ]] && exit 1
+: > "${args[-1]}"

@@ -2,34 +2,65 @@
 # menu: Make clips (edit-ready, constant frame rate)
 . "$(dirname "$(readlink -f "$0")")/../lib/phone-lib"
 
-declare -A files            # date -> newline-separated video paths
+# Group videos by recording date (clip_stamp), as "stamp<TAB>path" lines kept in recording order.
+declare -A files            # date -> newline-separated "stamp<TAB>path"
 while IFS=$'\t' read -r mtime f; do
-  d=$(date -d "@${mtime%.*}" +%F); files[$d]+="$f"$'\n'
+  st=$(clip_stamp "$f" "$mtime"); files[${st%% *}]+="$st"$'\t'"$f"$'\n'
 done < <(find "$ROOT/videos" -type f -printf '%T@\t%p\n')
-dates=($(printf '%s\n' "${!files[@]}" | sort))
-(( ${#dates[@]} )) || { echo "No pulled videos yet."; exit 0; }
+mapfile -t dates < <(printf '%s\n' "${!files[@]}" | grep . | sort -r)   # newest first
+total=${#dates[@]}
+(( total )) || { echo "No pulled videos yet."; exit 0; }
+for d in "${dates[@]}"; do files[$d]=$(grep . <<<"${files[$d]}" | sort); done     # stamp, then path
 
-for i in "${!dates[@]}"; do
-  d=${dates[$i]}; n=$(grep -c . <<<"${files[$d]}"); have=0
-  while IFS= read -r f; do [[ -n $f && -e $CLIPS/$d/$(basename "${f%.*}").mp4 ]] && have=$((have+1)); done <<<"${files[$d]}"
-  printf '  %2d) %s  %d video(s), %d clip(s) done\n' $((i+1)) "$d" "$n" "$have"
+list_dates() {
+  local shown=$total i d n have bad f st
+  (( show_all )) || shown=$(( total < 10#$CLIPS_MENU_DAYS ? total : 10#$CLIPS_MENU_DAYS ))
+  for ((i=0; i<shown; i++)); do
+    d=${dates[$i]}; n=0; have=0; bad=0
+    while IFS=$'\t' read -r st f; do
+      n=$((n+1)); out=$(clip_path "$f" "$(stat -c %Y "$f")")
+      [[ -e $out ]] && have=$((have+1)); [[ -e $out.unverified ]] && bad=$((bad+1))
+    done <<<"${files[$d]}"
+    printf '  %2d) %s  %d video(s), %d clip(s) done' $((i+1)) "$d" "$n" "$have"
+    (( bad )) && printf ', %d unverified' "$bad"; echo
+  done
+  (( shown < total )) && echo "  ... $((total-shown)) older date(s) hidden; \"a\" lists all (numbers and dates still reach them)"
+}
+
+# num_ok N: 1..total (10# so "08" is 8, not an octal error)
+num_ok() { [[ $1 =~ ^[0-9]{1,6}$ ]] && (( 10#$1 >= 1 && 10#$1 <= total )); }
+
+show_all=0; sel=()
+while true; do
+  list_dates
+  echo "Pick: a number (3), a range of numbers (3-5), a date (2026-10-01), a date range (2026-10-01..2026-10-05), a (list all) or q."
+  read -r -p "> " pick || exit 0
+  pick=${pick//[[:space:]]/}; sel=()
+  if [[ $pick == [qQ] ]]; then exit 0
+  elif [[ $pick == [aA] ]]; then show_all=1; continue
+  elif [[ -z $pick ]]; then continue
+  elif [[ $pick =~ ^([0-9]+)(-([0-9]+))?$ ]]; then
+    lo=${BASH_REMATCH[1]}; hi=${BASH_REMATCH[3]:-$lo}
+    if ! num_ok "$lo" || ! num_ok "$hi"; then echo "No such number: $pick (1-$total)"; continue; fi
+    lo=$((10#$lo)); hi=$((10#$hi)); (( lo > hi )) && { k=$lo; lo=$hi; hi=$k; }
+    for ((k=lo; k<=hi; k++)); do sel+=("${dates[$((k-1))]}"); done
+  elif [[ $pick =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})(\.\.([0-9]{4}-[0-9]{2}-[0-9]{2}))?$ ]]; then
+    lo=${BASH_REMATCH[1]}; hi=${BASH_REMATCH[3]:-$lo}
+    [[ $lo > $hi ]] && { k=$lo; lo=$hi; hi=$k; }
+    for d in "${dates[@]}"; do [[ ! $d < $lo && ! $d > $hi ]] && sel+=("$d"); done
+    (( ${#sel[@]} )) || { echo "No recordings between $lo and $hi"; continue; }
+  else echo "Not understood: $pick"; continue; fi
+  break
 done
-echo "Pick: a number (3), a range of numbers (3-5), a date (2026-10-01), a date range (2026-10-01..2026-10-05), or q."
-read -r -p "> " pick
-sel=()
-if [[ $pick =~ ^[0-9]+$ ]]; then sel=("${dates[$((pick-1))]:-}")
-elif [[ $pick =~ ^([0-9]+)-([0-9]+)$ ]]; then for ((k=${BASH_REMATCH[1]}; k<=${BASH_REMATCH[2]}; k++)); do sel+=("${dates[$((k-1))]:-}"); done
-elif [[ $pick =~ ^([0-9-]{10})(\.\.([0-9-]{10}))?$ ]]; then
-  lo=${BASH_REMATCH[1]}; hi=${BASH_REMATCH[3]:-$lo}
-  for d in "${dates[@]}"; do [[ $d == "$lo" || $d > "$lo" ]] && [[ $d == "$hi" || $d < "$hi" ]] && sel+=("$d"); done
-else exit 0; fi
 
-ok=0; bad=0
+made=0 done_=0 bad=0
 for d in "${sel[@]}"; do
-  [[ -n $d ]] || continue
-  while IFS= read -r f; do
+  # fd 3, so nothing make_clip runs can eat the rest of the list from stdin
+  while IFS=$'\t' read -r -u 3 st f; do
     [[ -n $f ]] || continue
-    echo "-> $f"; if make_clip "$f" "$(stat -c %Y "$f")"; then ok=$((ok+1)); else bad=$((bad+1)); fi
-  done <<<"${files[$d]}"
+    out=$(clip_path "$f" "$(stat -c %Y "$f")")
+    if [[ -e $out ]]; then done_=$((done_+1)); continue; fi
+    echo "-> $f"; if make_clip "$f" "$(stat -c %Y "$f")"; then made=$((made+1)); else bad=$((bad+1)); fi
+  done 3<<<"${files[$d]}"
 done
-say "Clips: $ok ok, $bad failed (in $CLIPS)"
+say "Clips: $made made, $done_ already done, $bad failed (in $CLIPS)"

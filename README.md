@@ -15,12 +15,28 @@ mirrors the phone fullscreen on the configured monitor, and a kitty window on th
 | `actions/` | One executable per menu entry. |
 | `systemd/phone-pull.service` | User unit; `Type=simple` so a replug can't start a second session. |
 | `udev/99-phone-pull.rules` | Starts that unit when the Samsung's adb interface appears. |
-| `tests/run-tests.sh` | Offline tests against a fake adb (a directory standing in for the phone). No phone, no windows. |
+| `tests/run-tests.sh` | Offline tests against a fake adb (a directory standing in for the phone) and fake ffmpeg/ffprobe (`tests/fakebin-ff`). No phone, no windows. |
 | `config.example` | Copy to `~/.config/phone/config`. |
 
 scrcpy runs as its own transient user unit, `phone-scrcpy`, so quitting the menu does not stop it. It exits
 by itself when the phone is unplugged. Stop it by hand with `systemctl --user stop phone-scrcpy`.
 Logs: `~/.local/state/phone-pull.log`.
+
+## Clips
+
+A clip is an edit-ready, constant-frame-rate h264/AAC copy of a pulled video, at `/data/footage/clips/<date>/<name>.mp4`.
+
+**Dating.** The `<date>` is when the recording *started*: taken from the Samsung filename (`YYYYMMDD_HHMMSS`, optionally
+with a `-<md5>` or `_N` suffix), because file mtime is when it *ended* (a 23:58 video would land on the next day) and
+changes if the phone edits the file. Names that don't parse fall back to mtime. One function, `clip_path` in
+`lib/phone-lib`, decides this for both `make_clip` and the menu, so they can't disagree.
+
+**Menu (item 1).** Dates are listed newest first; `1` is the most recent recording date. The newest 14 are shown
+(`CLIPS_MENU_DAYS` in the config), with a note of how many older dates are hidden; `a` lists all. Each line shows the number
+of videos, how many clips exist and how many are `*.mp4.unverified`. Pick a number (`3`), a range (`3-5`, either order),
+a date (`2026-10-01`) or a date range (`2026-10-01..2026-10-05`, either order); numbers and dates also reach hidden dates.
+Bad input is rejected with a message and you are asked again; `q` quits. Within a date, videos are made in recording
+order. Existing clips are skipped; the summary says how many were made, already done, and failed.
 
 ## Audio sync
 
