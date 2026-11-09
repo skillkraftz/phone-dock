@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fake stenographr: `stenographr clip VIDEO... --out DIR` writes DIR/<stem>.md for each video.
+# Fake stenographr: `stenographr clip VIDEO... --out DIR` writes DIR/<stem>.txt for each video.
 # FAKE_STENO_FAIL=<substring>: no transcript (and exit 1) for videos whose path contains it.
 # Logs the call to $FAKE_STENO_LOG and "steno" to $FAKE_ORDER_LOG (shared with the fake ffmpeg).
 [[ $1 == clip ]] || exit 2; shift
@@ -10,6 +10,6 @@ printf '%s\n' "clip ${vids[*]} --out $out" >> "${FAKE_STENO_LOG:-/dev/null}"
 rc=0
 for v in "${vids[@]}"; do
   if [[ -n ${FAKE_STENO_FAIL:-} && $v == *"$FAKE_STENO_FAIL"* ]]; then rc=1; continue; fi
-  b=${v##*/}; mkdir -p "$out"; echo "transcript of $b" > "$out/${b%.*}.md"
+  b=${v##*/}; mkdir -p "$out"; echo "transcript of $b" > "$out/${b%.*}.txt"
 done
 exit $rc

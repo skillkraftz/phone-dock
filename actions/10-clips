@@ -19,7 +19,7 @@ list_dates() {
     d=${dates[$i]}; n=0; have=0; bad=0; tr=0
     while IFS=$'\t' read -r st f; do
       n=$((n+1)); out=$(clip_path "$f" "$(stat -c %Y "$f")")
-      [[ -e $out ]] && have=$((have+1)); [[ -e $out.unverified ]] && bad=$((bad+1)); [[ -e ${out%.mp4}.md ]] && tr=$((tr+1))
+      [[ -e $out ]] && have=$((have+1)); [[ -e $out.unverified ]] && bad=$((bad+1)); [[ -e ${out%.mp4}.txt ]] && tr=$((tr+1))
     done <<<"${files[$d]}"
     printf '  %2d) %s  %d video(s), %d clip(s) done, %d transcribed' $((i+1)) "$d" "$n" "$have" "$tr"
     (( bad )) && printf ', %d unverified' "$bad"; echo
@@ -54,7 +54,7 @@ while true; do
 done
 
 # Transcribe the originals first (one stenographr call per date, so the model loads once per date).
-# Skipped here when a transcript exists, so a rerun doesn't print refusals. Counted by whether the .md
+# Skipped here when a transcript exists, so a rerun doesn't print refusals. Counted by whether the .txt
 # exists afterwards, not by parsing stenographr's output; a failed transcript never blocks the encode.
 tmade=0 tdone=0 tbad=0 transcribing=0
 if [[ $TRANSCRIBE == 1 ]]; then

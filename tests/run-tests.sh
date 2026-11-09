@@ -229,23 +229,23 @@ reset17() { rm -rf "$CL"; : > "$FAKE_ORDER_LOG"; : > "$FAKE_STENO_LOG"; }
 clipsrun "1"
 check "stenographr called once for the date, before any encoding" '[[ $(steno_calls) == 1 && $(grep -c steno "$FAKE_ORDER_LOG") == 1 && $(sed -n 1p "$FAKE_ORDER_LOG") == steno && $(grep -c ffmpeg "$FAKE_ORDER_LOG") == 3 ]]'
 check "all 3 originals and --out CLIPS/<date> in that call" 'grep -q -- "--out $CL/2026-03-03\$" "$FAKE_STENO_LOG" && [[ $(grep -o "videos/2026/03/[^ ]*mp4" "$FAKE_STENO_LOG" | wc -l) == 3 ]]'
-check "transcripts beside the clips" '[[ -e $CL/2026-03-03/clip.md && -e $CL/2026-03-03/clip.mp4 ]]'
+check "transcripts beside the clips" '[[ -e $CL/2026-03-03/clip.txt && -e $CL/2026-03-03/clip.mp4 ]]'
 check "summary line counts" 'grep -q "^Transcripts: 3 made, 0 already done, 0 failed" "$W/out" && grep -q "3 made, 0 already done, 0 failed (in" "$W/out"'
 clipsrun "q"
 check "date list shows transcribed count" 'grep -qE "^ +1\) 2026-03-03  3 video\(s\), 3 clip\(s\) done, 3 transcribed" "$W/out" && grep -qE "^ +2\) 2026-03-02  1 video\(s\), 0 clip\(s\) done, 0 transcribed" "$W/out"'
 : > "$FAKE_STENO_LOG"; clipsrun "1"
 check "rerun: nothing passed to stenographr, all already done" '[[ $(steno_calls) == 0 ]] && grep -q "^Transcripts: 0 made, 3 already done, 0 failed" "$W/out" && ! grep -qi "refus\|already transcribed" "$W/out"'
-reset17; mkdir -p "$CL/2026-03-03"; echo mine > "$CL/2026-03-03/clip.md"
+reset17; mkdir -p "$CL/2026-03-03"; echo mine > "$CL/2026-03-03/clip.txt"
 clipsrun "1"
-check "an existing transcript is skipped, only the other 2 are passed" '[[ $(steno_calls) == 1 ]] && ! grep -q "clip.mp4" "$FAKE_STENO_LOG" && [[ $(grep -o "videos/2026/03/[^ ]*mp4" "$FAKE_STENO_LOG" | wc -l) == 2 ]] && [[ $(cat "$CL/2026-03-03/clip.md") == mine ]] && grep -q "^Transcripts: 2 made, 1 already done, 0 failed" "$W/out"'
+check "an existing transcript is skipped, only the other 2 are passed" '[[ $(steno_calls) == 1 ]] && ! grep -q "clip.mp4" "$FAKE_STENO_LOG" && [[ $(grep -o "videos/2026/03/[^ ]*mp4" "$FAKE_STENO_LOG" | wc -l) == 2 ]] && [[ $(cat "$CL/2026-03-03/clip.txt") == mine ]] && grep -q "^Transcripts: 2 made, 1 already done, 0 failed" "$W/out"'
 reset17
 FAKE_STENO_FAIL=clip.mp4 clipsrun "1"
-check "transcription failure: clip still made, counted as failed" '[[ -e $CL/2026-03-03/clip.mp4 && ! -e $CL/2026-03-03/clip.md && $(ffn) == 3 ]] && grep -q "^Transcripts: 2 made, 0 already done, 1 failed" "$W/out" && grep -q "3 made, 0 already done, 0 failed (in" "$W/out"'
+check "transcription failure: clip still made, counted as failed" '[[ -e $CL/2026-03-03/clip.mp4 && ! -e $CL/2026-03-03/clip.txt && $(ffn) == 3 ]] && grep -q "^Transcripts: 2 made, 0 already done, 1 failed" "$W/out" && grep -q "3 made, 0 already done, 0 failed (in" "$W/out"'
 reset17
 clipsrun "1"; check "control: TRANSCRIBE=1 calls stenographr" '[[ $(steno_calls) == 1 ]]'
 reset17; cp "$W/config" "$W/config.save"; echo "TRANSCRIBE=0" >> "$W/config"
 clipsrun "1"
-check "TRANSCRIBE=0: stenographr never called, silent, clips still made" '[[ $(steno_calls) == 0 && ! -e $CL/2026-03-03/clip.md && -e $CL/2026-03-03/clip.mp4 ]] && ! grep -qi "stenographr\|^Transcripts" "$W/out"'
+check "TRANSCRIBE=0: stenographr never called, silent, clips still made" '[[ $(steno_calls) == 0 && ! -e $CL/2026-03-03/clip.txt && -e $CL/2026-03-03/clip.mp4 ]] && ! grep -qi "stenographr\|^Transcripts" "$W/out"'
 mv "$W/config.save" "$W/config"
 reset17
 # PATH holding everything except stenographr (the real one may live in ~/.local/bin)

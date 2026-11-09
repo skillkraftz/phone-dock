@@ -41,7 +41,7 @@ order. Existing clips are skipped; the summary says how many were made, already 
 **Transcripts.** Unless `TRANSCRIBE=0` is set in the config, the menu first transcribes the selected originals with
 [`stenographr`](https://github.com/skillkraftz/stenographr) (must be on `PATH`; if not, you get one notice and clips
 are made as usual). It makes one `stenographr clip` call per date, so the model loads once per date, writing
-`$CLIPS/<date>/<name>.md` beside the clip. Originals that already have a transcript are skipped (stenographr allows
+`$CLIPS/<date>/<name>.txt` beside the clip. Originals that already have a transcript are skipped (stenographr allows
 one transcript per source file). A failed transcript never blocks the clip; the end of the run prints
 `Transcripts: X made, Y already done, Z failed`, and each date line shows how many are transcribed.
 

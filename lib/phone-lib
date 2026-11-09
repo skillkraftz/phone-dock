@@ -71,8 +71,8 @@ clip_path() {
   printf '%s/%s/%s.mp4\n' "$CLIPS" "${stamp%% *}" "${b%.*}"
 }
 
-# transcript_path SRC MTIME -> the transcript (stenographr .md) of an original, beside its clip.
-transcript_path() { local p; p=$(clip_path "$1" "$2"); printf '%s.md\n' "${p%.mp4}"; }
+# transcript_path SRC MTIME -> the transcript (stenographr .txt) of an original, beside its clip.
+transcript_path() { local p; p=$(clip_path "$1" "$2"); printf '%s.txt\n' "${p%.mp4}"; }
 
 # Make a constant-frame-rate, edit-ready h264/AAC copy of $1 (mtime $2) at clip_path.
 make_clip() {
